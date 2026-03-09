@@ -1,42 +1,294 @@
+/* ─── Root ───────────────────────────────────────────────── */
 #root {
-  max-width: 1280px;
+  min-height: 100vh;
+  position: relative;
+  z-index: 1;
+}
+
+/* ─── Event horizon scene background ─────────────────────── */
+.scene-bg {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+
+/* Soft radial ambient glow — the "accretion disk" halo */
+.scene-glow {
+  position: absolute;
+  top: 38%;
+  left: 50%;
+  width: 900px;
+  height: 900px;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(
+    ellipse at center,
+    rgba(255, 255, 255, 0.07) 0%,
+    rgba(255, 255, 255, 0.03) 38%,
+    transparent 68%
+  );
+  border-radius: 50%;
+  animation: glow-pulse 6s ease-in-out infinite alternate;
+}
+
+/* Bright rotating streak — the "event horizon beam" */
+.scene-streak {
+  position: absolute;
+  top: 38%;
+  left: 50%;
+  width: 160vw;
+  height: 1px;
+  transform-origin: center center;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 10%,
+    rgba(255, 255, 255, 0.0) 28%,
+    rgba(255, 255, 255, 0.55) 42%,
+    rgba(255, 255, 255, 1.0) 50%,
+    rgba(255, 255, 255, 0.55) 58%,
+    rgba(255, 255, 255, 0.0) 72%,
+    transparent 90%,
+    transparent 100%
+  );
+  filter: blur(5px);
+  animation: streak-rotate 14s linear infinite;
+}
+
+@keyframes streak-rotate {
+  from { transform: translate(-50%, -50%) rotate(0deg); }
+  to   { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+@keyframes glow-pulse {
+  from { opacity: 0.45; transform: translate(-50%, -50%) scale(0.88); }
+  to   { opacity: 1.0;  transform: translate(-50%, -50%) scale(1.12); }
+}
+
+/* ─── Page layouts ───────────────────────────────────────── */
+.page {
+  max-width: 1100px;
   margin: 0 auto;
-  padding: 2rem;
+  padding: 2rem 1.5rem 5rem;
+  text-align: left;
+}
+
+.page--centered {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 2rem 1.5rem;
+}
+
+/* ─── Home page ──────────────────────────────────────────── */
+.home-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
+  gap: 1.5rem;
+  max-width: 580px;
+  width: 100%;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+.home-title {
+  font-size: 4em;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: -0.04em;
+  background: linear-gradient(180deg, #ffffff 0%, rgba(255, 255, 255, 0.6) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+.home-subtitle {
+  color: rgba(255, 255, 255, 0.42);
+  margin: 0;
+  font-size: 1rem;
+  letter-spacing: 0.01em;
+  line-height: 1.6;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
+.home-hint {
+  font-size: 0.76rem;
+  color: rgba(255, 255, 255, 0.22);
+  margin: 0;
 }
 
-.card {
-  padding: 2em;
+/* ─── URL Input ──────────────────────────────────────────── */
+.repo-input {
+  width: 100%;
 }
 
-.read-the-docs {
-  color: #888;
+.repo-input input {
+  width: 100%;
+  padding: 0.9em 1.5em;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.95em;
+  color: rgba(255, 255, 255, 0.87);
+  outline: none;
+  transition: border-color 0.25s, background 0.25s, box-shadow 0.25s;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  text-align: center;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+.repo-input input::placeholder {
+  color: rgba(255, 255, 255, 0.22);
+}
+
+.repo-input input:focus {
+  border-color: rgba(255, 255, 255, 0.32);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.05);
+}
+
+/* ─── Loading state ──────────────────────────────────────── */
+.loading-state {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: rgba(255, 255, 255, 0.38);
+  font-size: 0.88em;
+}
+
+.loading-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid rgba(255, 255, 255, 0.12);
+  border-top-color: rgba(255, 255, 255, 0.65);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ─── Error ──────────────────────────────────────────────── */
+.error-message {
+  color: #f87171;
+  font-size: 0.88em;
+  margin: 0;
+}
+
+/* ─── Results header ─────────────────────────────────────── */
+.results-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 2.5rem;
+  flex-wrap: wrap;
+}
+
+.results-title {
+  font-size: 1.9em;
+  margin: 0 0 0.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  word-break: break-all;
+}
+
+.gradient-text {
+  background: linear-gradient(180deg, #ffffff 0%, rgba(255, 255, 255, 0.6) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.results-meta {
+  margin: 0;
+  font-size: 0.82em;
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9999px;
+  padding: 0.45em 1.1em;
+  font-size: 0.83em;
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.55);
+  white-space: nowrap;
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.btn-secondary:hover {
+  border-color: rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.09);
+}
+
+/* ─── Tech stack tags ────────────────────────────────────── */
+.tech-tag {
+  display: inline-block;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9999px;
+  padding: 0.2em 0.75em;
+  font-size: 0.82em;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* ─── Setup instructions ─────────────────────────────────── */
+pre.setup {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  font-size: 0.87em;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  color: rgba(255, 255, 255, 0.7);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+/* ─── File tree ──────────────────────────────────────────── */
+.file-tree {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.85em;
+  line-height: 1.9;
+  overflow-x: auto;
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.tree-node {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  user-select: none;
+}
+
+.tree-node--dir {
+  cursor: pointer;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.tree-node--dir:hover {
+  color: #fff;
+}
+
+.tree-node--file {
+  color: rgba(255, 255, 255, 0.38);
+}
+
+.tree-icon {
+  font-size: 0.9em;
+  flex-shrink: 0;
 }
