@@ -13,7 +13,7 @@ export default function RepoInput({ url, onChange, loading, onSubmit }) {
         value={url}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={handleKey}
-        placeholder="https://github.com/owner/repo"
+        placeholder=""
         disabled={loading}
         aria-label="GitHub repository URL"
         autoFocus

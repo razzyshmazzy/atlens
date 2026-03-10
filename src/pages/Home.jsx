@@ -44,7 +44,7 @@ export default function Home() {
       <section className="home-hero">
         <h1 className="home-title">Atlens</h1>
         <p className="home-subtitle">
-          Paste a GitHub repository URL to get an AI-generated overview.
+          Into the artifice of eternity.
         </p>
 
         <RepoInput
@@ -59,8 +59,6 @@ export default function Home() {
         {error && (
           <p className="error-message" role="alert">{error}</p>
         )}
-
-        <p className="home-hint">Press Enter to analyze. Works with any public GitHub repository.</p>
       </section>
     </main>
   )

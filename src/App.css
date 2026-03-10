@@ -38,27 +38,32 @@
   top: 38%;
   left: 50%;
   width: 160vw;
-  height: 1px;
-  transform-origin: center center;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    transparent 10%,
-    rgba(255, 255, 255, 0.0) 28%,
-    rgba(255, 255, 255, 0.55) 42%,
-    rgba(255, 255, 255, 1.0) 50%,
-    rgba(255, 255, 255, 0.55) 58%,
-    rgba(255, 255, 255, 0.0) 72%,
-    transparent 90%,
-    transparent 100%
-  );
-  filter: blur(5px);
-  animation: streak-rotate 14s linear infinite;
+  height: 2px;
+  transform: translate(-50%, -50%);
+  background:
+    /* Traveling bright crest */
+    radial-gradient(ellipse at center, rgba(255, 255, 255, 0.95) 0%, transparent 70%),
+    /* Static fade shape */
+    linear-gradient(
+      90deg,
+      transparent 5%,
+      rgba(255, 255, 255, 0.2) 28%,
+      rgba(255, 255, 255, 0.65) 50%,
+      rgba(255, 255, 255, 0.2) 72%,
+      transparent 95%
+    );
+  background-size: 22% 400%, 100% 100%;
+  background-repeat: no-repeat;
+  filter: blur(1.5px);
+  animation: streak-ripple 7s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
 
-@keyframes streak-rotate {
-  from { transform: translate(-50%, -50%) rotate(0deg); }
-  to   { transform: translate(-50%, -50%) rotate(360deg); }
+@keyframes streak-ripple {
+  0%   { background-position: -22% 50%, 0 0; opacity: 0.55; }
+  15%  { opacity: 0.9; }
+  50%  { opacity: 0.95; }
+  85%  { opacity: 0.9; }
+  100% { background-position: 122% 50%, 0 0; opacity: 0.55; }
 }
 
 @keyframes glow-pulse {

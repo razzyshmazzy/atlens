@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import RepoOverview from '../components/RepoOverview'
 import FileTree from '../components/FileTree'
+import RepoOrbital from '../components/RepoOrbital'
 
 export default function Results() {
   const [data, setData] = useState(null)
@@ -37,8 +38,9 @@ export default function Results() {
         </button>
       </header>
 
+      <RepoOrbital analysis={data.analysis} />
       <RepoOverview analysis={data.analysis} />
-      <FileTree nodes={data.fileTree} />
+      <FileTree nodes={data.fileTree} keyFiles={data.analysis?.keyFiles} />
     </main>
   )
 }
