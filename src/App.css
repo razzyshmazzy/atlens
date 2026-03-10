@@ -55,6 +55,7 @@
   background-size: 22% 400%, 100% 100%;
   background-repeat: no-repeat;
   filter: blur(1.5px);
+  transition: transform 0.9s cubic-bezier(0.25, 0.46, 0.45, 0.94);
   animation: streak-ripple 7s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
 
@@ -64,6 +65,25 @@
   50%  { opacity: 0.95; }
   85%  { opacity: 0.9; }
   100% { background-position: 122% 50%, 0 0; opacity: 0.55; }
+}
+
+/* Mirrored floor glow — synced to the streak's pulse */
+.scene-floor {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 80vw;
+  height: 80px;
+  transform: translateX(-50%);
+  background: radial-gradient(
+    ellipse at center bottom,
+    rgba(255, 255, 255, 0.1) 0%,
+    rgba(255, 255, 255, 0.04) 40%,
+    transparent 70%
+  );
+  filter: blur(12px);
+  /* Same duration + easing as streak-ripple so opacity pulses in sync */
+  animation: streak-ripple 7s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
 
 @keyframes glow-pulse {
