@@ -1,7 +1,6 @@
 // Fully client-side analysis pipeline — no backend. Runs in the browser:
 //   GitHub API (fetch repo) → summarize context → local Transformers.js model.
 import { validateGitHubUrl, fetchRepo } from '../lib/analysis/github'
-import { summarize } from '../lib/analysis/summarizer'
 import { analyzeRepo as runAnalysis, preloadModel } from '../lib/analysis/analyzer'
 
 export { preloadModel }
@@ -17,8 +16,7 @@ export async function analyzeRepo(repoUrl) {
   const { repoName } = validateGitHubUrl(repoUrl)
 
   const { files, tree, fileCount, skippedFiles } = await fetchRepo(repoUrl)
-  const context = summarize(files)
-  const analysis = await runAnalysis(context, repoName, files)
+  const analysis = await runAnalysis(null, repoName, files)
 
   return {
     ok: true,

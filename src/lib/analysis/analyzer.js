@@ -1,40 +1,67 @@
 import { pipeline, env } from '@huggingface/transformers'
 
-// Browser config: don't look for local model files; cache downloaded weights in
-// the browser Cache API so the ~120MB model is only fetched once per visitor.
+// Don't look for model files on the local filesystem — always fetch from the
+// HuggingFace Hub. (useBrowserCache already defaults to true in browsers, which
+// caches the downloaded weights so the model is only fetched once per visitor.)
 env.allowLocalModels = false
-env.useBrowserCache = true
 
-// Small distilled summarization model. Runs client-side via WASM/WebGPU.
-const SUMMARY_MODEL = 'Xenova/distilbart-cnn-6-6'
+// Instruction-tuned text2text model. Unlike a news summarizer, it can SYNTHESIZE
+// a description from structured evidence (manifest descriptions, API clients,
+// routes, module names) rather than just rephrasing a README — which is often
+// boilerplate. ~250MB quantized; runs client-side via WASM/WebGPU.
+const MODEL = 'Xenova/LaMini-Flan-T5-248M'
 
-let _summarizer = null
-async function getSummarizer() {
-  if (!_summarizer) {
-    _summarizer = await pipeline('summarization', SUMMARY_MODEL)
+let _generator = null
+async function getGenerator() {
+  if (!_generator) {
+    _generator = await pipeline('text2text-generation', MODEL)
   }
-  return _summarizer
+  return _generator
 }
 
 /** Kick off the model download/load early (e.g. when the page mounts). */
 export async function preloadModel() {
   try {
-    await getSummarizer()
+    await getGenerator()
   } catch {
-    // Swallow — analyzeRepo falls back to extractive summaries if loading fails.
+    // Swallow — analyzeRepo falls back to a templated description if loading fails.
   }
 }
 
-// GitHub paths use '/'; this helper avoids node:path in the browser.
+async function generate(prompt, maxNewTokens = 80) {
+  const gen = await getGenerator()
+  const [out] = await gen(prompt, {
+    max_new_tokens: maxNewTokens,
+    do_sample: false,
+    repetition_penalty: 1.3,
+  })
+  return (out?.generated_text ?? '').trim()
+}
+
+// GitHub paths use '/'; these helpers avoid node:path in the browser.
 const basename = (p) => p.split('/').pop()
 const extname = (p) => {
   const b = basename(p)
   const i = b.lastIndexOf('.')
   return i <= 0 ? '' : b.slice(i).toLowerCase()
 }
+function findFile(files, predicate) {
+  return files.find((f) => !f.skipped && f.content && predicate(f))
+}
+
+/** Turn a camelCase / kebab / snake identifier into Title Case words. */
+function humanize(s) {
+  return s
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[-_]/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .replace(/Pdf/g, 'PDF')
+    .replace(/Api/g, 'API')
+    .trim()
+}
 
 // ---------------------------------------------------------------------------
-// Heuristic structured extraction
+// Tech stack
 // ---------------------------------------------------------------------------
 
 const LANG_BY_EXT = {
@@ -55,6 +82,7 @@ const KNOWN_FRAMEWORKS = {
   express: 'Express', fastify: 'Fastify', koa: 'Koa', '@nestjs/core': 'NestJS',
   'react-router-dom': 'React Router', redux: 'Redux', zustand: 'Zustand',
   tailwindcss: 'Tailwind CSS', '@radix-ui/react-slot': 'Radix UI',
+  axios: 'axios', motion: 'Motion', 'framer-motion': 'Framer Motion',
   django: 'Django', flask: 'Flask', fastapi: 'FastAPI', numpy: 'NumPy',
   pandas: 'pandas', torch: 'PyTorch', tensorflow: 'TensorFlow',
   rails: 'Rails', sinatra: 'Sinatra', gin: 'Gin', actix: 'Actix',
@@ -67,11 +95,23 @@ const KNOWN_TOOLS = {
   jest: 'Jest', vitest: 'Vitest', mocha: 'Mocha', cypress: 'Cypress', playwright: 'Playwright',
   nodemon: 'nodemon', concurrently: 'concurrently', 'gh-pages': 'gh-pages',
   postcss: 'PostCSS', autoprefixer: 'Autoprefixer', babel: 'Babel', '@babel/core': 'Babel',
+  winston: 'Winston', 'node-cache': 'node-cache', 'express-rate-limit': 'rate limiting',
+  dotenv: 'dotenv', cors: 'CORS',
   pytest: 'pytest', black: 'Black', ruff: 'Ruff', poetry: 'Poetry',
 }
 
-function findFile(files, predicate) {
-  return files.find((f) => !f.skipped && f.content && predicate(f))
+/** Parse every package.json in the repo (monorepos / client+server splits). */
+function collectPackageJsons(files) {
+  const pkgs = []
+  for (const f of files) {
+    if (f.skipped || !f.content || basename(f.path) !== 'package.json') continue
+    try {
+      pkgs.push(JSON.parse(f.content))
+    } catch {
+      /* ignore malformed */
+    }
+  }
+  return pkgs
 }
 
 function detectLanguages(files) {
@@ -85,22 +125,11 @@ function detectLanguages(files) {
     .map(([lang]) => lang)
 }
 
-function readPackageJson(files) {
-  const pkgFile = findFile(files, (f) => basename(f.path) === 'package.json')
-  if (!pkgFile) return null
-  try {
-    return JSON.parse(pkgFile.content)
-  } catch {
-    return null
-  }
-}
-
-function detectStack(files) {
+function detectStack(files, pkgs) {
   const frameworks = new Set()
   const tools = new Set()
 
-  const pkg = readPackageJson(files)
-  if (pkg) {
+  for (const pkg of pkgs) {
     const deps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) }
     for (const name of Object.keys(deps)) {
       if (KNOWN_FRAMEWORKS[name]) frameworks.add(KNOWN_FRAMEWORKS[name])
@@ -128,6 +157,192 @@ function detectStack(files) {
   return { frameworks: [...frameworks], tools: [...tools] }
 }
 
+// ---------------------------------------------------------------------------
+// Evidence extraction — the raw material the model reasons over
+// ---------------------------------------------------------------------------
+
+const README_BOILERPLATE = [
+  /this template provides a minimal setup to get react working in vite/i,
+  /getting started with create react app/i,
+  /npm create vite/i,
+  /this is a \[next\.js\]\(https:\/\/nextjs\.org\) project bootstrapped/i,
+]
+
+/** README content if it actually describes the project (not a starter template). */
+function meaningfulReadme(files) {
+  const readme = findFile(files, (f) => /^readme/i.test(basename(f.path)))
+  if (!readme) return null
+  if (README_BOILERPLATE.some((re) => re.test(readme.content))) return null
+  return readme.content
+}
+
+/** External integrations from service client files named like fooClient.js. */
+function detectApiClients(files) {
+  return [
+    ...new Set(
+      files
+        .filter((f) => !f.skipped && /(^|\/)services\//.test(f.path) && /client\.(jsx?|tsx?)$/i.test(basename(f.path)))
+        .map((f) => humanize(basename(f.path).replace(/Client\.(jsx?|tsx?)$/i, ''))),
+    ),
+  ]
+}
+
+/** HTTP route mount points from express `app.use('/...', ...)`. */
+function detectRoutes(files) {
+  const routes = new Set()
+  for (const f of files) {
+    if (f.skipped || !f.content) continue
+    for (const m of f.content.matchAll(/app\.use\(\s*['"`]\/(?:api\/)?([a-z0-9_-]+)['"`]/gi)) {
+      routes.add(m[1])
+    }
+  }
+  return [...routes]
+}
+
+const BORING_MODULE = /^(index|main|app|client|server|config|utils?|types|constants|errorHandler|logger|cors|rateLimiter|middleware|setup|vite|eslint)/i
+const FEATURE_DIR = /(^|\/)(pages|views|screens|components|features|services|controllers|handlers|models)\//
+
+/**
+ * Distinctive feature/UI module names — the main signal for frontend apps that
+ * have no package.json description, API clients, or server routes.
+ */
+function detectModules(files) {
+  return [
+    ...new Set(
+      files
+        .filter((f) => !f.skipped && /\.(jsx?|tsx?)$/i.test(f.path) && FEATURE_DIR.test(f.path) && !/\/ui\//.test(f.path))
+        .map((f) => basename(f.path).replace(/\.(jsx?|tsx?)$/i, ''))
+        .filter((s) => !BORING_MODULE.test(s) && !/Client$/.test(s))
+        .map(humanize),
+    ),
+  ].slice(0, 10)
+}
+
+/** Gather the raw signals used to build prompts and deterministic fallbacks. */
+function buildEvidence(files, pkgs) {
+  return {
+    descriptions: [...new Set(pkgs.map((p) => p.description).filter(Boolean))],
+    clients: detectApiClients(files),
+    routes: detectRoutes(files),
+    modules: detectModules(files),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Prose generation
+// ---------------------------------------------------------------------------
+
+function cleanReadme(text) {
+  return text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[#>*_`|]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** Keep the first 1-2 *complete* sentences and tidy model filler. */
+function tidyPurpose(text) {
+  let t = text
+    .replace(/\s+/g, ' ')
+    .replace(/^the software repository\b/i, 'This project')
+    .replace(/^this (software )?repository\b/i, 'This project')
+    .trim()
+  // Only keep sentences the model actually finished (drops truncated tails).
+  const complete = t.match(/[^.!?]+[.!?]+/g)
+  if (complete) t = complete.slice(0, 2).join(' ').trim()
+  // Drop a trailing mechanical "It includes/uses notable modules ..." clause.
+  t = t.replace(/\s*It (includes|uses|features) notable modules[^.!?]*[.!?]?$/i, '').trim()
+  return t.slice(0, 320)
+}
+
+/** Strong evidence string for the purpose prompt (the signals the model handles well). */
+function purposeEvidence(evidence) {
+  return (
+    (evidence.descriptions.length ? `Stated description: ${evidence.descriptions.join('; ')}. ` : '') +
+    (evidence.clients.length
+      ? `Integrates ${evidence.clients.length} external API client${evidence.clients.length > 1 ? 's' : ''}: ${evidence.clients.join(', ')}. `
+      : '') +
+    (evidence.routes.length ? `Exposes endpoints for: ${evidence.routes.join(', ')}. ` : '')
+  ).trim()
+}
+
+const SPA_FRAMEWORKS = ['React', 'Vue', 'Svelte', 'Angular', 'SolidJS', 'Preact', 'Next.js', 'Nuxt']
+const BACKEND_FRAMEWORKS = ['Express', 'Fastify', 'Koa', 'NestJS', 'Django', 'Flask', 'FastAPI', 'Rails']
+
+/**
+ * Honest, deterministic description for repos with no stated purpose anywhere
+ * (no manifest description, no README prose, no API surface). The model only
+ * hallucinates generic filler from such thin input, so we state the facts.
+ */
+function describeFromStructure(languages, stack, evidence) {
+  const lang = languages[0] ?? 'software'
+  let kind = 'application'
+  if (stack.frameworks.some((f) => SPA_FRAMEWORKS.includes(f))) kind = 'single-page web application'
+  else if (stack.frameworks.some((f) => BACKEND_FRAMEWORKS.includes(f))) kind = 'backend service'
+  let s = `A ${lang} ${kind}`
+  if (stack.frameworks.length) s += ` built with ${stack.frameworks.slice(0, 4).join(', ')}`
+  if (evidence.modules.length) s += `, whose main parts include ${evidence.modules.slice(0, 6).join(', ')}`
+  return s + '.'
+}
+
+/** Deterministic one-liner from strong evidence; null if there's nothing to say. */
+function fallbackPurpose(evidence) {
+  if (evidence.descriptions.length) {
+    let s = evidence.descriptions[0]
+    if (evidence.clients.length) s += `, integrating ${evidence.clients.join(', ')}`
+    return s.endsWith('.') ? s : s + '.'
+  }
+  if (evidence.clients.length) return `Integrates ${evidence.clients.join(', ')}.`
+  return null
+}
+
+async function generatePurpose(files, languages, stack, evidence) {
+  const readme = meaningfulReadme(files)
+  const readmeExcerpt = readme ? cleanReadme(readme).slice(0, 800) : null
+  const evidenceText = purposeEvidence(evidence)
+
+  // No stated purpose anywhere → state the facts rather than let the model guess.
+  if (!evidenceText && !readmeExcerpt) return describeFromStructure(languages, stack, evidence)
+
+  const prompt =
+    `You are summarizing a software repository for a developer. Using only the evidence below, ` +
+    `write one clear sentence (max 35 words) describing what the project does and what it is for. ` +
+    `Do not list file paths.\n\n` +
+    `Evidence: ${evidenceText}` +
+    (readmeExcerpt ? `\nREADME excerpt: ${readmeExcerpt}` : '') +
+    `\n\nOne-sentence description:`
+
+  try {
+    const out = await generate(prompt, 64)
+    return tidyPurpose(out) || fallbackPurpose(evidence) || describeFromStructure(languages, stack, evidence)
+  } catch {
+    return fallbackPurpose(evidence) || describeFromStructure(languages, stack, evidence)
+  }
+}
+
+/**
+ * Architecture is a factual, deterministic sentence — the model produced vague
+ * filler here, whereas the structural facts (stack, layout, integrations) are
+ * both reliable and more useful.
+ */
+function describeArchitecture(files, languages, stack, evidence) {
+  const dirs = [...new Set(files.map((f) => f.path.split('/')[0]).filter((d) => d && !d.includes('.')))].slice(0, 10)
+  const lead = languages[0] ? `A ${languages[0]} project` : 'A multi-language project'
+  const parts = [stack.frameworks.length ? `${lead} built with ${stack.frameworks.slice(0, 5).join(', ')}` : lead]
+  if (dirs.length) parts.push(`organized into top-level ${dirs.join(', ')}`)
+  if (evidence.clients.length) {
+    parts.push(`integrating ${evidence.clients.length} external API${evidence.clients.length > 1 ? 's' : ''} (${evidence.clients.join(', ')})`)
+  }
+  if (evidence.routes.length) parts.push(`with a backend exposing ${evidence.routes.join(', ')} endpoints`)
+  return parts.join(', ') + '.'
+}
+
+// ---------------------------------------------------------------------------
+// Structured field heuristics
+// ---------------------------------------------------------------------------
+
 const ENTRY_PATTERNS = [
   /^(index|main|app|server|client|entry)\.(jsx?|tsx?|py|go|rs|rb|php|java|cs)$/i,
   /^App\.(jsx?|tsx?)$/i,
@@ -154,6 +369,8 @@ function roleFor(p) {
   if (/^(vite|webpack|rollup)\.config\./.test(b)) return 'Build tool configuration'
   if (/eslint/.test(b)) return 'Linter configuration'
   if (/tailwind\.config/.test(b)) return 'Tailwind CSS configuration'
+  if (/client\.(jsx?|tsx?)$/.test(b)) return 'External API client'
+  if (/controller\.(jsx?|tsx?)$/.test(b)) return 'Request handler / controller'
   if (/^(main|index)\./.test(b)) return 'Application entry point'
   if (/^app\./.test(b)) return 'Root application component'
   if (/^server\./.test(b)) return 'Server entry point'
@@ -168,9 +385,9 @@ function detectKeyFiles(files) {
     .map((f) => ({ path: f.path, role: roleFor(f.path) }))
 }
 
-function detectSetup(files) {
-  const pkg = readPackageJson(files)
-  if (pkg?.scripts) {
+function detectSetup(files, pkgs) {
+  const pkg = pkgs.find((p) => p.scripts && Object.keys(p.scripts).length)
+  if (pkg) {
     const scripts = Object.keys(pkg.scripts)
     const runScript = scripts.includes('dev') ? 'dev' : scripts.includes('start') ? 'start' : scripts[0]
     const parts = ['Install dependencies with `npm install`.']
@@ -204,75 +421,27 @@ function detectOpenQuestions(files) {
 }
 
 // ---------------------------------------------------------------------------
-// Transformer-generated prose
-// ---------------------------------------------------------------------------
-
-function cleanText(text) {
-  return text
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/[#>*_`|-]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-async function summarizeText(text, { minLength, maxLength }) {
-  const clean = cleanText(text)
-  if (clean.length < 40) return clean || null
-  const input = clean.slice(0, 3000)
-  try {
-    const summarizer = await getSummarizer()
-    const [out] = await summarizer(input, { min_length: minLength, max_length: maxLength, do_sample: false })
-    return out?.summary_text?.trim() || null
-  } catch {
-    // Fallback: extractive first sentence of the cleaned text.
-    return clean.slice(0, maxLength * 5).split(/(?<=[.!?])\s/)[0] || null
-  }
-}
-
-function findReadme(files) {
-  return findFile(files, (f) => /^readme/i.test(basename(f.path)))
-}
-
-async function generatePurpose(files, repoContext, repoName) {
-  const readme = findReadme(files)
-  const source = readme?.content ?? repoContext
-  const summary = await summarizeText(source, { minLength: 15, maxLength: 60 })
-  return summary ?? `${repoName} — purpose could not be determined from the available files.`
-}
-
-async function generateArchitecture(files, languages, stack) {
-  const dirs = [...new Set(files.map((f) => f.path.split('/')[0]).filter((d) => d && !d.includes('.')))].slice(0, 12)
-  const structural =
-    `This project is built with ${[...languages, ...stack.frameworks].slice(0, 5).join(', ') || 'no detected stack'}. ` +
-    `It is organized into the following top-level directories: ${dirs.join(', ') || 'a flat layout'}. ` +
-    `Key tooling includes ${stack.tools.join(', ') || 'no notable tooling detected'}. ` +
-    `The codebase contains ${files.filter((f) => !f.skipped).length} analysed files across these areas.`
-  if (structural.length < 220) return structural
-  const summary = await summarizeText(structural, { minLength: 25, maxLength: 90 })
-  return summary ?? structural
-}
-
-// ---------------------------------------------------------------------------
-// Public API — returns the structured analysis object the frontend consumes.
+// Public API
 // ---------------------------------------------------------------------------
 
 /**
- * Analyze a repository in the browser: heuristics for structured fields + a
- * local mini transformer (Transformers.js) for the prose fields.
+ * Analyze a repository in the browser: structured heuristics + a local
+ * instruction-tuned transformer (Transformers.js) that synthesizes the prose
+ * fields from extracted evidence.
  *
- * @param {string}   repoContext  Output of summarize() (fallback text source)
- * @param {string}   repoName     Human-readable repo identifier
- * @param {object[]} files        FileEntry objects from github.fetchRepo()
+ * @param {string}   _repoContext  (unused — kept for call-site compatibility)
+ * @param {string}   repoName
+ * @param {object[]} files         FileEntry objects from github.fetchRepo()
  * @returns {Promise<object>}
  */
-export async function analyzeRepo(repoContext, repoName, files) {
+export async function analyzeRepo(_repoContext, repoName, files) {
+  const pkgs = collectPackageJsons(files)
   const languages = detectLanguages(files)
-  const stack = detectStack(files)
+  const stack = detectStack(files, pkgs)
+  const evidence = buildEvidence(files, pkgs)
 
-  const purpose = await generatePurpose(files, repoContext, repoName)
-  const architecture = await generateArchitecture(files, languages, stack)
+  const purpose = await generatePurpose(files, languages, stack, evidence)
+  const architecture = describeArchitecture(files, languages, stack, evidence)
 
   return {
     repoName,
@@ -285,7 +454,7 @@ export async function analyzeRepo(repoContext, repoName, files) {
     architecture,
     entryPoints: detectEntryPoints(files),
     keyFiles: detectKeyFiles(files),
-    setupInstructions: detectSetup(files),
+    setupInstructions: detectSetup(files, pkgs),
     openQuestions: detectOpenQuestions(files),
   }
 }
