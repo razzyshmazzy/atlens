@@ -218,6 +218,33 @@ function detectModules(files) {
   ].slice(0, 10)
 }
 
+// Console-output / print statements across common languages. The string a
+// program prints IS its behavior — invaluable for CLI tools and scripts that
+// have no README, manifest, or API surface to describe them.
+const OUTPUT_RE =
+  /\b(?:System\.out\.print(?:ln)?|console\.(?:log|info)|print|printf|println!|fmt\.Print(?:ln|f)?|puts|echo)\s*\(?\s*(["'`])((?:\\.|(?!\1).)*)\1/g
+
+const INPUT_PROMPT_RE = /^(enter|type|input|please|choose|select|how |what |press|usage|enter the)/i
+
+/** Extract user-facing input prompts and output labels from print statements. */
+function detectOutput(files) {
+  const seen = new Set()
+  for (const f of files) {
+    if (f.skipped || !f.content) continue
+    for (const m of f.content.matchAll(OUTPUT_RE)) {
+      const s = m[2].trim()
+      if (s.length > 1 && /[a-zA-Z]/.test(s)) seen.add(s)
+    }
+  }
+  const inputs = []
+  const labels = []
+  for (const s of seen) {
+    if (INPUT_PROMPT_RE.test(s)) inputs.push(s.replace(/[:?]\s*$/, '').trim())
+    else labels.push(s.replace(/\s*[:=]\s*\$?\s*$/, '').trim())
+  }
+  return { inputs: inputs.slice(0, 6), labels: labels.filter(Boolean).slice(0, 12) }
+}
+
 /** Gather the raw signals used to build prompts and deterministic fallbacks. */
 function buildEvidence(files, pkgs) {
   return {
@@ -225,6 +252,7 @@ function buildEvidence(files, pkgs) {
     clients: detectApiClients(files),
     routes: detectRoutes(files),
     modules: detectModules(files),
+    output: detectOutput(files),
   }
 }
 
@@ -248,6 +276,16 @@ function tidyPurpose(text) {
     .replace(/\s+/g, ' ')
     .replace(/^the software repository\b/i, 'This project')
     .replace(/^this (software )?repository\b/i, 'This project')
+    .trim()
+  // Safety net: if the model spilled into a code snippet (e.g. "...Money: java
+  // public static void main(...)"), cut it off. Triggered only by unambiguous
+  // code signatures — never by single words that occur in real prose.
+  t = t.split(/[{};]/)[0] // prose never contains braces or semicolons
+  t = t
+    .replace(
+      /\s*[:：]?\s*(?:System\.out\b|public\s+(?:static|class|void)\b|void\s+main\b|import\s+[\w.]+|def\s+\w+\s*\(|function\s+\w*\s*\()[\s\S]*$/i,
+      '',
+    )
     .trim()
   // Only keep sentences the model actually finished (drops truncated tails).
   const complete = t.match(/[^.!?]+[.!?]+/g)
@@ -298,13 +336,38 @@ function fallbackPurpose(evidence) {
   return null
 }
 
+/** Prompt the model to describe a program from what it prints (CLI tools, scripts). */
+async function purposeFromOutput(output, languages) {
+  const lang = languages[0] ? `${languages[0]} ` : ''
+  // Quoting the input prompt verbatim keeps the model from misreading it; listing
+  // the output labels keeps the description specific to what the program emits.
+  const readsClause = output.inputs.length ? `reads "${output.inputs.join('; ')}" from the user and ` : ''
+  // Instruction first, facts second — ending on a colon makes the model emit code.
+  const prompt =
+    `In one sentence, describe what this ${lang}command-line program does. ` +
+    `It ${readsClause}prints values labeled for ${output.labels.join(', ')}.`
+  const out = await generate(prompt, 70)
+  return tidyPurpose(out)
+}
+
 async function generatePurpose(files, languages, stack, evidence) {
   const readme = meaningfulReadme(files)
   const readmeExcerpt = readme ? cleanReadme(readme).slice(0, 800) : null
   const evidenceText = purposeEvidence(evidence)
 
-  // No stated purpose anywhere → state the facts rather than let the model guess.
-  if (!evidenceText && !readmeExcerpt) return describeFromStructure(languages, stack, evidence)
+  // No stated purpose (no manifest description, no API surface, no real README)?
+  // Describe the program by what it prints, then fall back to its structure.
+  if (!evidenceText && !readmeExcerpt) {
+    if (evidence.output.labels.length) {
+      try {
+        const fromOutput = await purposeFromOutput(evidence.output, languages)
+        if (fromOutput) return fromOutput
+      } catch {
+        /* fall through to structural description */
+      }
+    }
+    return describeFromStructure(languages, stack, evidence)
+  }
 
   const prompt =
     `You are summarizing a software repository for a developer. Using only the evidence below, ` +
