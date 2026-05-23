@@ -4,7 +4,7 @@ import cors from 'cors'
 import { validateGitHubUrl, cloneOrUpdate } from './repoCloner.js'
 import { parseRepo } from './repoParser.js'
 import { summarize } from './summarizer.js'
-import { analyzeRepo } from './llm.js'
+import { analyzeRepo, preloadModel } from './localAnalyzer.js'
 
 const app = express()
 const PORT = process.env.PORT ?? 3001
@@ -51,13 +51,12 @@ app.post('/analyze', async (req, res, next) => {
     // Step 4: Compress file contents into LLM-sized context
     const context = summarize(parsed.files)
 
-    // Step 5: Call the LLM for analysis
+    // Step 5: Analyze locally — heuristics + a local mini transformer (no external API)
     let analysis
     try {
-      analysis = await analyzeRepo(context, repoInfo.repoName)
+      analysis = await analyzeRepo(context, repoInfo.repoName, parsed.files)
     } catch (err) {
-      const status = err.code === 'rate_limited' ? 503 : 502
-      return res.status(status).json({ ok: false, error: err.code ?? 'llm_error', message: err.message })
+      return res.status(502).json({ ok: false, error: err.code ?? 'analysis_error', message: err.message })
     }
 
     return res.json({
@@ -82,4 +81,7 @@ app.use((err, req, res, _next) => {
 
 app.listen(PORT, () => {
   console.log(`Atlens server running on http://localhost:${PORT}`)
+  // Warm the summarization model in the background so the first /analyze
+  // request doesn't wait on a cold model load.
+  preloadModel()
 })
