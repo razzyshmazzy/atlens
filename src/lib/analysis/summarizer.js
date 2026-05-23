@@ -1,15 +1,15 @@
-// Line limits per file category (controls how much context is sent to the LLM)
-const PRIORITY_LINES = 150  // README, package.json, entry points
-const SRC_LINES = 80        // src/** files
-const OTHER_LINES = 40      // everything else
+// Compresses fetched file contents into a single context string for the model.
+// Pure string manipulation — identical logic to the former server/summarizer.js,
+// but path handling uses '/' (GitHub paths) instead of node:path.
 
-// Hard cap on total context size (well within Haiku's 200K token window)
+const PRIORITY_LINES = 150 // README, package.json, entry points
+const SRC_LINES = 80 // src/** files
+const OTHER_LINES = 40 // everything else
+
 const MAX_TOTAL_CHARS = 100_000
 
-/**
- * Truncate file content to a maximum number of lines.
- * Appends a marker if lines were omitted.
- */
+const basename = (p) => p.split('/').pop()
+
 function truncate(content, maxLines) {
   const lines = content.split('\n')
   if (lines.length <= maxLines) return content
@@ -17,52 +17,38 @@ function truncate(content, maxLines) {
   return `${kept}\n[... ${lines.length - maxLines} more lines not shown ...]`
 }
 
-/**
- * Determine the line limit for a given file path.
- */
 function lineLimit(filePath) {
   const lower = filePath.toLowerCase()
-  // Priority: README, package.json, Dockerfile, etc.
   if (
     /readme/i.test(filePath) ||
     /^(package\.json|pyproject\.toml|cargo\.toml|go\.mod|requirements\.txt|dockerfile|docker-compose\.ya?ml|makefile)$/i.test(
-      filePath.split('/').pop()
+      basename(filePath),
     )
   ) {
     return PRIORITY_LINES
   }
-  // Source directories
   if (/\/(src|lib|app|server|api|pages|components|routes|controllers|models|views|utils|hooks)\//i.test('/' + lower)) {
     return SRC_LINES
   }
   return OTHER_LINES
 }
 
-/**
- * Build a formatted block for one file.
- */
 function fileBlock(filePath, content) {
-  const limit = lineLimit(filePath)
-  const body = truncate(content, limit)
+  const body = truncate(content, lineLimit(filePath))
   return `=== ${filePath} ===\n${body}\n`
 }
 
 /**
- * Compress file contents into a single context string suitable for the LLM.
- * Priority files come first, then source files, then the rest.
- * Total size is capped at MAX_TOTAL_CHARS.
- *
- * @param {object[]} files  Array of FileEntry objects from repoParser
- * @returns {string}        Context string ready to embed in the LLM prompt
+ * Compress file contents into a single context string suitable for the model.
+ * @param {object[]} files  FileEntry objects from github.fetchRepo()
+ * @returns {string}
  */
 export function summarize(files) {
   const readable = files.filter((f) => !f.skipped && f.content)
 
-  // Separate into buckets
   const priority = readable.filter((f) => f.priority)
   const nonPriority = readable.filter((f) => !f.priority)
 
-  // Sort non-priority: src files first, then the rest
   nonPriority.sort((a, b) => {
     const aIsSrc = /\/(src|lib|app|server|api)\//.test('/' + a.path)
     const bIsSrc = /\/(src|lib|app|server|api)\//.test('/' + b.path)
@@ -73,7 +59,6 @@ export function summarize(files) {
   const ordered = [...priority, ...nonPriority]
   const skipped = files.filter((f) => f.skipped)
 
-  // Build header with stats
   const header = [
     `Repository contains ${files.length} analysed files (${skipped.length} skipped due to size or binary content).`,
     skipped.length > 0
