@@ -25,6 +25,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+        env:
+          # URL of the deployed Atlens proxy Worker. Set it under
+          # Settings → Secrets and variables → Actions → Variables.
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import RepoInput from '../components/RepoInput'
 import LoadingState from '../components/LoadingState'
-import { analyzeRepo, preloadModel } from '../services/api'
+import { analyzeRepo } from '../services/api'
 
 export default function Home() {
   const [url, setUrl] = useState('')
@@ -11,12 +11,6 @@ export default function Home() {
   const [error, setError] = useState(null)
   const navigate = useNavigate()
   const timersRef = useRef([])
-
-  // Warm the summarization model in the background while the user types the URL,
-  // so the first analysis doesn't wait on the ~120MB model download.
-  useEffect(() => {
-    preloadModel()
-  }, [])
 
   function clearTimers() {
     timersRef.current.forEach(clearTimeout)
