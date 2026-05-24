@@ -15,9 +15,4 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
-  // Transformers.js ships onnxruntime-web (WASM); excluding it from dep
-  // pre-bundling avoids esbuild choking on its dynamic worker/wasm imports.
-  optimizeDeps: {
-    exclude: ['@huggingface/transformers'],
-  },
 })

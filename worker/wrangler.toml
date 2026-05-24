@@ -1,0 +1,34 @@
+name = "atlens-proxy"
+main = "index.js"
+compatibility_date = "2024-11-01"
+
+# Set the secret with:  npx wrangler secret put GROQ_API_KEY
+# (get a free key — no card required — at https://console.groq.com/keys)
+
+# Optional: restrict which sites may call this proxy. Comma-separated origins.
+# When set, requests whose Origin isn't listed are rejected (403), not just
+# denied CORS. Leave unset to allow any origin.
+[vars]
+ALLOWED_ORIGINS = "https://razzyshmazzy.com,http://localhost:5173"
+# Hard ceiling on model calls per UTC day (keep below the free-tier quota).
+DAILY_LIMIT = "1000"
+
+# Daily-cap counter storage. Create the namespace once, then paste its id here:
+#   npx wrangler kv namespace create USAGE
+[[kv_namespaces]]
+binding = "USAGE_KV"
+id = "de733dbb31f143bdbab556eb038fc822"
+
+# Built-in rate limiting (free, no extra services). `period` must be 10 or 60.
+# Tune the limits to taste; namespace_id just has to be unique per limiter.
+[[unsafe.bindings]]
+name = "IP_LIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 1000, period = 60 }   # TESTING — dial back to ~8 for production
+
+[[unsafe.bindings]]
+name = "GLOBAL_LIMITER"
+type = "ratelimit"
+namespace_id = "1002"
+simple = { limit = 1000, period = 60 }   # TESTING — dial back to ~30 for production
