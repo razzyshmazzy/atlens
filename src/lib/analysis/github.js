@@ -43,6 +43,7 @@ const PRIORITY_FILENAMES = new Set([
 
 const PRIORITY_PATTERNS = [
   /^(index|main|app|server|client|entry)\.(jsx?|tsx?|py|go|rs|rb|php|java|cs)$/i,
+  /^(index|main)\.html?$/i,
   /^App\.(jsx?|tsx?)$/i,
   /^__main__\.py$/i,
 ]
@@ -83,6 +84,68 @@ function isPriority(p) {
   const srcIdx = parts.findIndex((s) => ['src', 'lib', 'app', 'server', 'api'].includes(s))
   if (srcIdx !== -1 && parts.length - srcIdx <= 3) return true
   return false
+}
+
+// Maps a file extension to a coarse language "family". Web languages are grouped
+// because a JS/TS project's HTML and CSS are part of the same story — treating
+// them as rivals would starve the markup/styles that explain the app. Same logic
+// keeps C headers with C sources.
+const LANGUAGE_FAMILIES = {
+  web: ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.html', '.htm', '.css', '.scss', '.sass', '.less', '.vue', '.svelte', '.astro'],
+  python: ['.py', '.pyi', '.pyx'],
+  c: ['.c', '.h', '.cpp', '.cc', '.cxx', '.hpp', '.hh', '.hxx'],
+  go: ['.go'],
+  rust: ['.rs'],
+  ruby: ['.rb', '.erb', '.rake'],
+  php: ['.php'],
+  jvm: ['.java', '.kt', '.kts', '.scala', '.groovy', '.clj'],
+  csharp: ['.cs', '.fs', '.vb'],
+  swift: ['.swift'],
+  shell: ['.sh', '.bash', '.zsh', '.fish'],
+  dart: ['.dart'],
+  elixir: ['.ex', '.exs'],
+}
+
+// extension (with leading dot, lowercased) -> family
+const EXT_TO_FAMILY = new Map(
+  Object.entries(LANGUAGE_FAMILIES).flatMap(([family, exts]) => exts.map((e) => [e, family])),
+)
+
+function extOf(p) {
+  const base = basename(p)
+  const dot = base.lastIndexOf('.')
+  return dot <= 0 ? '' : base.slice(dot).toLowerCase()
+}
+
+function familyOf(p) {
+  return EXT_TO_FAMILY.get(extOf(p)) ?? null
+}
+
+/**
+ * The repo's primary language families, by file count: the smallest set of
+ * families covering >= 80% of all classified files (always at least one). Drives
+ * which files get budget — a Python repo spends it on .py, a React repo on its
+ * web files. Count, not bytes, so one big generated/data file can't skew it.
+ */
+function primaryFamilies(blobs) {
+  const counts = new Map()
+  let classified = 0
+  for (const b of blobs) {
+    const fam = familyOf(b.path)
+    if (!fam) continue
+    counts.set(fam, (counts.get(fam) ?? 0) + 1)
+    classified++
+  }
+  if (classified === 0) return new Set()
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1])
+  const primary = new Set()
+  let cumulative = 0
+  for (const [fam, n] of ranked) {
+    primary.add(fam)
+    cumulative += n
+    if (cumulative / classified >= 0.8) break
+  }
+  return primary
 }
 
 /** Build the nested {name, path, type, children} tree the UI renders. */
@@ -178,13 +241,22 @@ export async function fetchRepo(repoUrl) {
 
   const tree = buildTree(treeEntries)
 
-  // 3) Choose which blobs to download content for: priority files first, then
-  //    shallow paths, capped at MAX_FILES (mirrors the server's read budget).
+  // 3) Choose which blobs to download content for, capped at MAX_FILES. Three
+  //    tiers: priority files (README/manifests/entry points), then source in the
+  //    repo's primary language(s), then everything else. Within a tier, shallow
+  //    paths first, then alphabetical.
+  const primary = primaryFamilies(blobs)
+  const isPrimaryLang = (p) => {
+    const fam = familyOf(p)
+    return fam !== null && primary.has(fam)
+  }
+  const tierOf = (x) => (x.priority ? 0 : x.primaryLang ? 1 : 2)
   const ranked = blobs
-    .map((b) => ({ ...b, priority: isPriority(b.path) }))
+    .map((b) => ({ ...b, priority: isPriority(b.path), primaryLang: isPrimaryLang(b.path) }))
     .sort((a, b) => {
-      if (a.priority !== b.priority) return a.priority ? -1 : 1
-      return a.path.split('/').length - b.path.split('/').length
+      if (tierOf(a) !== tierOf(b)) return tierOf(a) - tierOf(b)
+      const depth = a.path.split('/').length - b.path.split('/').length
+      return depth !== 0 ? depth : a.path.localeCompare(b.path)
     })
   const selected = ranked.slice(0, MAX_FILES)
 
@@ -207,7 +279,7 @@ export async function fetchRepo(repoUrl) {
       if (content.includes('\u0000')) {
         return { path: b.path, content: null, sizeBytes: b.size, skipped: true, reason: 'binary' }
       }
-      return { path: b.path, content, sizeBytes: b.size, skipped: false, priority: b.priority }
+      return { path: b.path, content, sizeBytes: b.size, skipped: false, priority: b.priority, primaryLang: b.primaryLang }
     } catch {
       return { path: b.path, content: null, sizeBytes: b.size, skipped: true, reason: 'read_error' }
     }

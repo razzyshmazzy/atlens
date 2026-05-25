@@ -1,13 +1,26 @@
 // Compresses fetched file contents into a single context string for the model.
-// Priority files (README, manifests, entry points) come first, then source, then
-// the rest, capped at MAX_TOTAL_CHARS. Sent to the proxy, which forwards to Gemini.
+// Priority files (README, manifests, entry points) come first, then source in
+// the repo's primary language(s), then the rest, capped at MAX_TOTAL_CHARS. Sent
+// to the proxy, which forwards to Groq.
 
 const PRIORITY_LINES = 150
 const SRC_LINES = 80
 const OTHER_LINES = 40
-const MAX_TOTAL_CHARS = 100_000
+const MAX_TOTAL_CHARS = 70_000
 
 const basename = (p) => p.split('/').pop()
+
+// Conservative cleanup applied before truncation: collapse long blank-line runs
+// and drop a leading license/copyright banner. We deliberately KEEP imports —
+// they are the main signal the model uses to detect frameworks for techStack.
+function stripNoise(content) {
+  const collapsed = content.replace(/\n{3,}/g, '\n\n')
+  const deLicensed = collapsed.replace(
+    /^\s*(\/\*[\s\S]*?\*\/|(?:\/\/.*\n)+|(?:#.*\n)+)/,
+    (block) => (/copyright|licen[sc]e|spdx|permission is hereby granted/i.test(block) ? '' : block),
+  )
+  return deLicensed.trimStart()
+}
 
 function truncate(content, maxLines) {
   const lines = content.split('\n')
@@ -15,23 +28,21 @@ function truncate(content, maxLines) {
   return `${lines.slice(0, maxLines).join('\n')}\n[... ${lines.length - maxLines} more lines not shown ...]`
 }
 
-function lineLimit(filePath) {
+function lineLimit(file) {
   if (
-    /readme/i.test(filePath) ||
+    /readme/i.test(file.path) ||
     /^(package\.json|pyproject\.toml|cargo\.toml|go\.mod|requirements\.txt|dockerfile|docker-compose\.ya?ml|makefile)$/i.test(
-      basename(filePath),
+      basename(file.path),
     )
   ) {
     return PRIORITY_LINES
   }
-  if (/\/(src|lib|app|server|api|pages|components|routes|controllers|models|views|utils|hooks)\//i.test('/' + filePath.toLowerCase())) {
-    return SRC_LINES
-  }
+  if (file.primaryLang) return SRC_LINES
   return OTHER_LINES
 }
 
-function fileBlock(filePath, content) {
-  return `=== ${filePath} ===\n${truncate(content, lineLimit(filePath))}\n`
+function fileBlock(file) {
+  return `=== ${file.path} ===\n${truncate(stripNoise(file.content), lineLimit(file))}\n`
 }
 
 /**
@@ -44,10 +55,9 @@ export function buildContext(files) {
   const nonPriority = readable.filter((f) => !f.priority)
 
   nonPriority.sort((a, b) => {
-    const aSrc = /\/(src|lib|app|server|api)\//.test('/' + a.path)
-    const bSrc = /\/(src|lib|app|server|api)\//.test('/' + b.path)
-    if (aSrc !== bSrc) return aSrc ? -1 : 1
-    return a.path.localeCompare(b.path)
+    if (a.primaryLang !== b.primaryLang) return a.primaryLang ? -1 : 1
+    const depth = a.path.split('/').length - b.path.split('/').length
+    return depth !== 0 ? depth : a.path.localeCompare(b.path)
   })
 
   const ordered = [...priority, ...nonPriority]
@@ -66,7 +76,7 @@ export function buildContext(files) {
   let context = header + '\n'
   const dropped = []
   for (const file of ordered) {
-    const block = fileBlock(file.path, file.content)
+    const block = fileBlock(file)
     if (context.length + block.length > MAX_TOTAL_CHARS) {
       dropped.push(file.path)
       continue
