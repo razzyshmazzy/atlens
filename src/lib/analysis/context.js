@@ -6,7 +6,11 @@
 const PRIORITY_LINES = 150
 const SRC_LINES = 80
 const OTHER_LINES = 40
-const MAX_TOTAL_CHARS = 70_000
+// ~9.5K input tokens at the ~3.8 chars/token that source code averages. Kept
+// well under Groq's free-tier 12K tokens/minute ceiling once the system prompt
+// (~600 tok) and the JSON completion (~800 tok) are added — a single request
+// over that limit is rejected outright (HTTP 413), regardless of recent usage.
+const MAX_TOTAL_CHARS = 36_000
 
 const basename = (p) => p.split('/').pop()
 
