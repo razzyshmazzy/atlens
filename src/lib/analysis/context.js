@@ -3,14 +3,15 @@
 // the repo's primary language(s), then the rest, capped at MAX_TOTAL_CHARS. Sent
 // to the proxy, which forwards to Groq.
 
-const PRIORITY_LINES = 150
-const SRC_LINES = 80
-const OTHER_LINES = 40
-// ~9.5K input tokens at the ~3.8 chars/token that source code averages. Kept
-// well under Groq's free-tier 12K tokens/minute ceiling once the system prompt
-// (~600 tok) and the JSON completion (~800 tok) are added — a single request
-// over that limit is rejected outright (HTTP 413), regardless of recent usage.
-const MAX_TOTAL_CHARS = 36_000
+const PRIORITY_LINES = 100
+const SRC_LINES = 50
+const OTHER_LINES = 25
+// ~4.7K input tokens at the ~3.8 chars/token that source code averages. Halved
+// from the old 36K-char budget to stretch Groq's free-tier ~100K tokens/day
+// quota across roughly twice as many analyses (each call ≈ context + ~600 tok
+// system + ~800 tok completion). Still comfortably under the 12K tokens/minute
+// ceiling, so a single request is never rejected outright (HTTP 413).
+const MAX_TOTAL_CHARS = 18_000
 
 const basename = (p) => p.split('/').pop()
 
