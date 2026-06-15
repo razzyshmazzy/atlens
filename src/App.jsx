@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { HashRouter, Routes, Route } from 'react-router-dom'
 import Home from './pages/Home'
 import Results from './pages/Results'
+import UserRepos from './pages/UserRepos'
 import './App.css'
 
 export default function App() {
@@ -32,6 +33,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/results" element={<Results />} />
+          <Route path="/user/:username" element={<UserRepos />} />
         </Routes>
       </HashRouter>
     </>

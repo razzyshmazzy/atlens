@@ -23,6 +23,13 @@ export default function Results() {
 
   if (!data) return null
 
+  const fromUser = sessionStorage.getItem('atlens_from_user')
+
+  function handleBack() {
+    if (fromUser) navigate(`/user/${fromUser}`)
+    else navigate('/')
+  }
+
   return (
     <main className="page">
       <header className="results-header">
@@ -33,8 +40,8 @@ export default function Results() {
             {data.skippedFiles > 0 && ` · ${data.skippedFiles} skipped`}
           </p>
         </div>
-        <button className="btn-secondary" onClick={() => navigate('/')}>
-          ← Analyze another
+        <button className="btn-secondary" onClick={handleBack}>
+          {fromUser ? `← ${fromUser}` : '← Analyze another'}
         </button>
       </header>
 

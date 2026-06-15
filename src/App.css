@@ -282,6 +282,186 @@ pre.setup {
   font-family: 'SF Mono', 'Fira Code', monospace;
 }
 
+/* ─── User repos page ───────────────────────────────────── */
+.user-repos-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.user-repos-title {
+  flex: 1;
+  font-size: 1.6em;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: -0.02em;
+  background: linear-gradient(180deg, #ffffff 0%, rgba(255, 255, 255, 0.6) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.user-repos-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.repo-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: var(--radius);
+  padding: 0.9rem 1.2rem;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.repo-card:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.repo-card--seen {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.repo-card-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.repo-card-name {
+  font-size: 0.92em;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.15rem;
+}
+
+.repo-fork-tag {
+  font-size: 0.7em;
+  font-weight: 400;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9999px;
+  padding: 0.1em 0.55em;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.repo-card-desc {
+  margin: 0 0 0.4rem;
+  font-size: 0.81em;
+  color: rgba(255, 255, 255, 0.35);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.repo-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.repo-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.btn-atlens {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+  padding: 0.4em 1em;
+  font-size: 0.82em;
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.65);
+  white-space: nowrap;
+  font-family: inherit;
+  font-weight: 500;
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
+}
+
+.btn-atlens:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #fff;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.btn-atlens:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.btn-see-again {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+  padding: 0.3em 0.8em;
+  font-size: 0.75em;
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.42);
+  white-space: nowrap;
+  font-family: inherit;
+  transition: border-color 0.2s, color 0.2s;
+}
+
+.btn-see-again:hover {
+  border-color: rgba(255, 255, 255, 0.32);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.summarize-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 0.86em;
+  margin-bottom: 1.5rem;
+}
+
+.summary-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: var(--radius);
+  padding: 1.2rem 1.4rem;
+  margin-bottom: 2rem;
+}
+
+.summary-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.summary-card-label {
+  font-size: 0.76em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.3);
+  font-weight: 500;
+}
+
+.summary-card-text {
+  margin: 0;
+  font-size: 0.93em;
+  line-height: 1.75;
+  color: rgba(255, 255, 255, 0.72);
+}
+
 /* ─── File tree ──────────────────────────────────────────── */
 .file-tree {
   font-family: 'SF Mono', 'Fira Code', monospace;

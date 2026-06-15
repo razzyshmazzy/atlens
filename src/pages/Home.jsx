@@ -19,6 +19,15 @@ export default function Home() {
 
   async function handleAnalyze() {
     if (loading) return
+    const trimmed = url.trim()
+
+    // Username-only → browse their repos
+    if (/^[a-zA-Z0-9][a-zA-Z0-9-]*$/.test(trimmed)) {
+      navigate(`/user/${trimmed}`)
+      return
+    }
+
+    sessionStorage.removeItem('atlens_from_user')
     setError(null)
     setLoading(true)
     setLoadingStep(1)

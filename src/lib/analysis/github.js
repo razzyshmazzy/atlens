@@ -3,7 +3,7 @@
 // enabled), then file contents from raw.githubusercontent.com (CORS-enabled and
 // NOT subject to the API rate limit). No backend required.
 
-const GITHUB_URL_REGEX = /^https:\/\/github\.com\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+?)(\.git)?\/?$/
+const GITHUB_URL_REGEX = /^(?:https?:\/\/github\.com\/|github\.com\/)?([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+?)(\.git)?\/?$/
 
 const MAX_FILES = 200
 const MAX_FILE_BYTES = 100 * 1024 // 100 KB
@@ -58,7 +58,7 @@ const basename = (p) => p.split('/').pop()
 export function validateGitHubUrl(url) {
   const match = (url ?? '').trim().match(GITHUB_URL_REGEX)
   if (!match) {
-    throw Object.assign(new Error('URL must be a public GitHub repository (https://github.com/owner/repo)'), {
+    throw Object.assign(new Error('Enter a public GitHub repo as owner/repo or a full URL'), {
       code: 'invalid_url',
     })
   }

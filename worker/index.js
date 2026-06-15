@@ -5,6 +5,13 @@
 
 const MODEL = 'llama-3.3-70b-versatile'
 
+const SUMMARIZE_SYSTEM_PROMPT = `You are profiling a GitHub developer based on their public repositories.
+You will receive a list of their repositories and a brief description of what each one does.
+Return a JSON object with a single "summary" field containing 2-4 sentences that concretely describe what kind of coder this person is, their interests, their typical project types, and their apparent strengths — inferred from what they actually build. Be specific and concrete, not generic.`
+
+const SUMMARIZE_USER_TEMPLATE = (username, repos) =>
+  `GitHub user: ${username}\n\nTheir repositories:\n${repos.map((r, i) => `${i + 1}. ${r.name}: ${r.purpose}`).join('\n')}\n\nReturn a JSON object with a "summary" field describing this developer.`
+
 const SYSTEM_PROMPT = `You are a senior software engineer analyzing a GitHub repository.
 You will be given the contents of key files from a repository.
 Your task is to produce a structured analysis in valid JSON format.
@@ -125,6 +132,67 @@ export default {
     // Hard daily ceiling — checked here so only valid, model-bound requests count.
     if (!(await withinDailyCap(env))) {
       return json({ ok: false, message: 'Daily analysis limit reached. Please try again tomorrow.' }, 429, cors)
+    }
+
+    const pathname = new URL(request.url).pathname
+
+    if (pathname === '/summarize') {
+      let username, repos
+      try {
+        ({ username, repos } = await request.json())
+      } catch {
+        return json({ ok: false, message: 'Invalid request body.' }, 400, cors)
+      }
+      if (!username || !Array.isArray(repos) || repos.length === 0) {
+        return json({ ok: false, message: 'username and repos are required.' }, 400, cors)
+      }
+
+      const groqBody = {
+        model: MODEL,
+        temperature: 0.4,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: SUMMARIZE_SYSTEM_PROMPT },
+          { role: 'user', content: SUMMARIZE_USER_TEMPLATE(username, repos) },
+        ],
+      }
+
+      let sRes
+      try {
+        sRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.GROQ_API_KEY}` },
+          body: JSON.stringify(groqBody),
+        })
+      } catch (err) {
+        console.error('[atlens] fetch to Groq threw:', err)
+        return json({ ok: false, message: 'Could not reach the analysis service.' }, 502, cors)
+      }
+
+      if (!sRes.ok) {
+        const detail = await sRes.text().catch(() => '')
+        console.error(`[atlens] Groq ${sRes.status}:`, detail)
+        if (sRes.status === 429) {
+          return json({ ok: false, message: 'Rate limit reached. Wait a moment and retry.' }, 503, cors)
+        }
+        return json({ ok: false, message: `Analysis service error (${sRes.status}).` }, 502, cors)
+      }
+
+      const sData = await sRes.json()
+      const sText = sData?.choices?.[0]?.message?.content
+      if (!sText) {
+        console.error('[atlens] Empty Groq response:', JSON.stringify(sData).slice(0, 500))
+        return json({ ok: false, message: 'Empty response from the analysis service.' }, 502, cors)
+      }
+
+      let sResult
+      try {
+        sResult = JSON.parse(sText)
+      } catch {
+        return json({ ok: false, message: 'Analysis service returned malformed JSON.' }, 502, cors)
+      }
+
+      return json({ ok: true, summary: sResult.summary ?? '' }, 200, cors)
     }
 
     // Groq is OpenAI-compatible. response_format json_object forces valid JSON;

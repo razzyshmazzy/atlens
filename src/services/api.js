@@ -47,3 +47,38 @@ export async function analyzeRepo(repoUrl) {
     skippedFiles,
   }
 }
+
+/**
+ * Run the full analysis pipeline for a repo but return only its purpose string.
+ * Returns null (instead of throwing) so callers can skip failed repos gracefully.
+ */
+export async function getRepoPurpose(repoUrl) {
+  try {
+    const data = await analyzeRepo(repoUrl)
+    return { name: data.repoName, purpose: data.analysis?.purpose ?? null }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Generate a coder profile summary from a list of { name, purpose } repo objects.
+ * @param {string} username
+ * @param {{ name: string, purpose: string }[]} repos
+ * @returns {Promise<string>}
+ */
+export async function summarizeUser(username, repos) {
+  let res
+  try {
+    res = await fetch(`${PROXY_URL}/summarize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, repos }),
+    })
+  } catch {
+    throw new Error('Could not reach the analysis service. Please try again.')
+  }
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok || !data.ok) throw new Error(data.message ?? 'Could not generate summary.')
+  return data.summary
+}
