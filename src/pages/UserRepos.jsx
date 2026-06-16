@@ -29,7 +29,16 @@ export default function UserRepos() {
   const [summary, setSummary] = useState(null)
   const [summarizeError, setSummarizeError] = useState(null)
 
-  const [lastRepo] = useState(() => sessionStorage.getItem('atlens_last_repo'))
+  const [lastRepo] = useState(() => {
+    const fromUser = sessionStorage.getItem('atlens_from_user')
+    if (fromUser !== username) {
+      sessionStorage.removeItem('atlens_result')
+      sessionStorage.removeItem('atlens_last_repo')
+      sessionStorage.removeItem('atlens_from_user')
+      return null
+    }
+    return sessionStorage.getItem('atlens_last_repo')
+  })
 
   useEffect(() => {
     async function load() {

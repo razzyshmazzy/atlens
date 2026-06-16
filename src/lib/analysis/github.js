@@ -7,6 +7,7 @@ const GITHUB_URL_REGEX = /^(?:https?:\/\/github\.com\/|github\.com\/)?([a-zA-Z0-
 
 const MAX_FILES = 200
 const MAX_FILE_BYTES = 100 * 1024 // 100 KB
+const MAX_TREE_ENTRIES = 400   // keeps sessionStorage well under quota for huge repos
 const FETCH_CONCURRENCY = 10
 
 // Directories to skip entirely (matched against any path segment).
@@ -231,6 +232,8 @@ export async function fetchRepo(repoUrl, knownBranch) {
   const rawEntries = Array.isArray(treeData.tree) ? treeData.tree : []
 
   // Entries (blobs + dirs) that survive the ignore filters — used for the UI tree.
+  // Tree entries are capped separately from content fetches so huge repos (e.g.
+  // linux with 80k files) don't blow the sessionStorage quota.
   const treeEntries = []
   const blobs = []
   for (const entry of rawEntries) {
@@ -238,7 +241,9 @@ export async function fetchRepo(repoUrl, knownBranch) {
     const isFile = entry.type === 'blob'
     if (!isDir && !isFile) continue
     if (isIgnoredPath(entry.path, isDir)) continue
-    treeEntries.push({ path: entry.path, type: isDir ? 'dir' : 'file' })
+    if (treeEntries.length < MAX_TREE_ENTRIES) {
+      treeEntries.push({ path: entry.path, type: isDir ? 'dir' : 'file' })
+    }
     if (isFile) blobs.push({ path: entry.path, size: entry.size ?? 0 })
   }
 
