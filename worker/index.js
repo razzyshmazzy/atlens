@@ -26,10 +26,11 @@ function parseRepo(input) {
   return { owner: m[1], repo: m[2] }
 }
 
-async function fetchRepoContext(owner, repo) {
-  const metaRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
-    headers: { Accept: 'application/vnd.github+json' },
-  })
+async function fetchRepoContext(owner, repo, githubToken) {
+  const ghHeaders = { Accept: 'application/vnd.github+json' }
+  if (githubToken) ghHeaders['Authorization'] = `Bearer ${githubToken}`
+
+  const metaRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers: ghHeaders })
   if (metaRes.status === 404) throw Object.assign(new Error('Repository not found or is private.'), { status: 404 })
   if (metaRes.status === 403 || metaRes.status === 429) throw Object.assign(new Error('GitHub rate limit reached. Try again in a moment.'), { status: 429 })
   if (!metaRes.ok) throw Object.assign(new Error(`GitHub error (${metaRes.status}).`), { status: 502 })
@@ -186,7 +187,7 @@ export default {
       const { owner, repo } = parsed
       let context
       try {
-        context = await fetchRepoContext(owner, repo)
+        context = await fetchRepoContext(owner, repo, env.GITHUB_TOKEN)
       } catch (err) {
         return json({ ok: false, message: err.message ?? 'Could not fetch repository.' }, err.status ?? 502, apiCors)
       }
