@@ -5,6 +5,59 @@
 
 const MODEL = 'llama-3.3-70b-versatile'
 
+// ── Public API ──────────────────────────────────────────────────────────────
+
+const API_SYSTEM_PROMPT = `You analyze GitHub repositories and describe what they do concisely.
+Return a JSON object with a single "purpose" field: 1-2 sentences describing what this project does, what it produces or outputs, and who it is for. Be specific, not generic.`
+
+const API_USER_TEMPLATE = (context) =>
+  `${context}\n\nReturn JSON with a single "purpose" field describing this repository.`
+
+const API_KEY_FILES = [
+  'README.md', 'README.rst', 'README.txt',
+  'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'requirements.txt',
+]
+const MAX_API_CONTEXT = 5000
+
+function parseRepo(input) {
+  const trimmed = (input ?? '').trim().replace(/\.git$/, '').replace(/\/$/, '')
+  const m = trimmed.match(/(?:https?:\/\/github\.com\/|github\.com\/|^)([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)$/)
+  if (!m) return null
+  return { owner: m[1], repo: m[2] }
+}
+
+async function fetchRepoContext(owner, repo) {
+  const metaRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+    headers: { Accept: 'application/vnd.github+json' },
+  })
+  if (metaRes.status === 404) throw Object.assign(new Error('Repository not found or is private.'), { status: 404 })
+  if (metaRes.status === 403 || metaRes.status === 429) throw Object.assign(new Error('GitHub rate limit reached. Try again in a moment.'), { status: 429 })
+  if (!metaRes.ok) throw Object.assign(new Error(`GitHub error (${metaRes.status}).`), { status: 502 })
+
+  const meta = await metaRes.json()
+  const branch = meta.default_branch ?? 'main'
+
+  let context = `Repository: ${owner}/${repo}\n`
+  if (meta.description) context += `Description: ${meta.description}\n`
+  context += '\n'
+
+  for (const filename of API_KEY_FILES) {
+    if (context.length >= MAX_API_CONTEXT) break
+    try {
+      const res = await fetch(
+        `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filename}`,
+      )
+      if (!res.ok) continue
+      const text = await res.text()
+      context += `=== ${filename} ===\n${text.slice(0, 2000)}\n\n`
+    } catch { /* skip missing files */ }
+  }
+
+  return context.slice(0, MAX_API_CONTEXT)
+}
+
+// ── App endpoints ───────────────────────────────────────────────────────────
+
 const SUMMARIZE_SYSTEM_PROMPT = `You are profiling a GitHub developer based on their public repositories.
 You will receive a list of their repositories and a brief description of what each one does.
 Return a JSON object with a single "summary" field containing 2-4 sentences that concretely describe what kind of coder this person is, their interests, their typical project types, and their apparent strengths — inferred from what they actually build. Be specific and concrete, not generic.`
@@ -99,17 +152,88 @@ export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin')
     const cors = corsHeaders(origin, env)
+    const pathname = new URL(request.url).pathname
+    const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown'
 
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors })
     if (request.method !== 'POST') return json({ ok: false, message: 'Method not allowed.' }, 405, cors)
 
-    // Server-side origin gate: reject callers outside the allowlist (blocks
-    // cross-site browser abuse, not just CORS-denies it).
+    // ── Public API: open to any origin, own stricter rate limit ─────────────
+    if (pathname === '/api') {
+      const apiCors = {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+      }
+
+      if (env.API_LIMITER) {
+        const { success } = await env.API_LIMITER.limit({ key: ip })
+        if (!success) return json({ ok: false, message: 'Rate limit exceeded. Max 5 requests per minute per IP.' }, 429, apiCors)
+      }
+      if (!env.GROQ_API_KEY) return json({ ok: false, message: 'Server misconfigured.' }, 500, apiCors)
+      if (!(await withinDailyCap(env))) return json({ ok: false, message: 'Daily limit reached. Try again tomorrow.' }, 429, apiCors)
+
+      let repoInput
+      try {
+        ({ repo: repoInput } = await request.json())
+      } catch {
+        return json({ ok: false, message: 'Invalid request body.' }, 400, apiCors)
+      }
+
+      const parsed = parseRepo(repoInput)
+      if (!parsed) return json({ ok: false, message: 'Invalid repo. Use "owner/repo" or a full GitHub URL.' }, 400, apiCors)
+
+      const { owner, repo } = parsed
+      let context
+      try {
+        context = await fetchRepoContext(owner, repo)
+      } catch (err) {
+        return json({ ok: false, message: err.message ?? 'Could not fetch repository.' }, err.status ?? 502, apiCors)
+      }
+
+      let aRes
+      try {
+        aRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.GROQ_API_KEY}` },
+          body: JSON.stringify({
+            model: MODEL,
+            temperature: 0.2,
+            response_format: { type: 'json_object' },
+            messages: [
+              { role: 'system', content: API_SYSTEM_PROMPT },
+              { role: 'user', content: API_USER_TEMPLATE(context) },
+            ],
+          }),
+        })
+      } catch {
+        return json({ ok: false, message: 'Could not reach the analysis service.' }, 502, apiCors)
+      }
+
+      if (!aRes.ok) {
+        const detail = await aRes.text().catch(() => '')
+        console.error(`[atlens/api] Groq ${aRes.status}:`, detail)
+        if (aRes.status === 429) return json({ ok: false, message: 'Rate limit reached. Try again in a moment.' }, 503, apiCors)
+        return json({ ok: false, message: `Analysis service error (${aRes.status}).` }, 502, apiCors)
+      }
+
+      const aData = await aRes.json()
+      const aText = aData?.choices?.[0]?.message?.content
+      if (!aText) return json({ ok: false, message: 'Empty response from analysis service.' }, 502, apiCors)
+
+      let result
+      try {
+        result = JSON.parse(aText)
+      } catch {
+        return json({ ok: false, message: 'Analysis service returned malformed JSON.' }, 502, apiCors)
+      }
+
+      return json({ ok: true, repo: `${owner}/${repo}`, purpose: result.purpose ?? '' }, 200, apiCors)
+    }
+
+    // ── App endpoints: gated by allowed origin ───────────────────────────────
     if (!originAllowed(origin, env)) return json({ ok: false, message: 'Origin not allowed.' }, 403, cors)
 
-    // Rate limiting: per-IP first (stops one source hammering), then a global
-    // cap (protects the shared free-tier quota from bursts).
-    const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown'
     if (env.IP_LIMITER) {
       const { success } = await env.IP_LIMITER.limit({ key: ip })
       if (!success) return json({ ok: false, message: 'Too many requests — please slow down and try again in a minute.' }, 429, cors)
@@ -120,8 +244,6 @@ export default {
     }
 
     if (!env.GROQ_API_KEY) return json({ ok: false, message: 'Server is missing GROQ_API_KEY.' }, 500, cors)
-
-    const pathname = new URL(request.url).pathname
 
     if (pathname === '/summarize') {
       let username, repos
