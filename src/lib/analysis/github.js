@@ -220,9 +220,11 @@ export async function fetchRepo(repoUrl, knownBranch) {
 
   // 1) Resolve the default branch (skip API call if caller already knows it).
   let branch = knownBranch
+  let pushedAt = null
   if (!branch) {
     const meta = await ghJson(`https://api.github.com/repos/${owner}/${repo}`)
     branch = meta.default_branch ?? 'main'
+    pushedAt = meta.pushed_at ?? null
   }
 
   // 2) One recursive tree call lists every blob/tree in the repo.
@@ -294,5 +296,5 @@ export async function fetchRepo(repoUrl, knownBranch) {
   })
 
   const skippedFiles = files.filter((f) => f.skipped).length
-  return { files, tree, fileCount: files.length, skippedFiles }
+  return { files, tree, fileCount: files.length, skippedFiles, pushedAt }
 }

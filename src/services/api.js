@@ -19,7 +19,7 @@ export async function analyzeRepo(repoUrl, knownBranch) {
   // Validate first so a bad URL fails fast with a clear message.
   const { repoName } = validateGitHubUrl(repoUrl)
 
-  const { files, tree, fileCount, skippedFiles } = await fetchRepo(repoUrl, knownBranch)
+  const { files, tree, fileCount, skippedFiles, pushedAt } = await fetchRepo(repoUrl, knownBranch)
   const context = buildContext(files)
 
   let res
@@ -27,7 +27,7 @@ export async function analyzeRepo(repoUrl, knownBranch) {
     res = await fetch(`${PROXY_URL}/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repoName, context }),
+      body: JSON.stringify({ repoName, context, pushedAt }),
     })
   } catch {
     throw new Error('Could not reach the analysis service. Please try again.')
@@ -67,7 +67,7 @@ export async function getRepoPurpose(repoUrl, knownBranch) {
       res = await fetch(`${PROXY_URL}/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repoName, context }),
+        body: JSON.stringify({ repoName, context, mini: true }),
       })
     } catch {
       return null

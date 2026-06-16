@@ -191,7 +191,7 @@ function parseRepo(input) {
   return { owner: m[1], repo: m[2] }
 }
 
-async function fetchFullRepo(owner, repo, githubToken) {
+async function fetchRepoMeta(owner, repo, githubToken) {
   const token = (githubToken ?? '').trim()
   const ghHeaders = { Accept: 'application/vnd.github+json', 'User-Agent': 'atlens-proxy' }
   if (token) ghHeaders['Authorization'] = `Bearer ${token}`
@@ -205,9 +205,14 @@ async function fetchFullRepo(owner, repo, githubToken) {
     throw Object.assign(new Error(`GitHub error: ${msg || metaRes.status}`), { status: 403 })
   }
   if (!metaRes.ok) throw Object.assign(new Error(`GitHub error (${metaRes.status}).`), { status: 502 })
-
   const meta = await metaRes.json()
-  const branch = meta.default_branch ?? 'main'
+  return { branch: meta.default_branch ?? 'main', pushedAt: meta.pushed_at ?? null }
+}
+
+async function fetchFullRepo(owner, repo, githubToken, branch) {
+  const token = (githubToken ?? '').trim()
+  const ghHeaders = { Accept: 'application/vnd.github+json', 'User-Agent': 'atlens-proxy' }
+  if (token) ghHeaders['Authorization'] = `Bearer ${token}`
 
   const treeRes = await fetch(
     `https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`,
@@ -347,6 +352,23 @@ async function withinDailyCap(env) {
   return true
 }
 
+async function getCachedAnalysis(env, repoName, pushedAt) {
+  if (!env.USAGE_KV) return null
+  try {
+    const entry = await env.USAGE_KV.get(`analysis:${repoName}`, { type: 'json' })
+    if (!entry || !entry.pushedAt) return null        // missing or old TTL-based format
+    if (pushedAt && entry.pushedAt !== pushedAt) return null  // repo has new commits
+    return entry.analysis
+  } catch { return null }
+}
+
+async function setCachedAnalysis(env, repoName, analysis, pushedAt) {
+  if (!env.USAGE_KV) return
+  try {
+    await env.USAGE_KV.put(`analysis:${repoName}`, JSON.stringify({ analysis, pushedAt: pushedAt ?? null }), { expirationTtl: 2592000 })
+  } catch { /* non-fatal */ }
+}
+
 function json(body, status, headers) {
   return new Response(JSON.stringify(body), {
     status,
@@ -377,7 +399,6 @@ export default {
         if (!success) return json({ ok: false, message: 'Rate limit exceeded. Max 5 requests per minute per IP.' }, 429, apiCors)
       }
       if (!env.GROQ_API_KEY) return json({ ok: false, message: 'Server misconfigured.' }, 500, apiCors)
-      if (!(await withinDailyCap(env))) return json({ ok: false, message: 'Daily limit reached. Try again tomorrow.' }, 429, apiCors)
 
       let repoInput, fields
       try {
@@ -403,14 +424,31 @@ export default {
       }
 
       const { owner, repo } = parsed
-      // Full analysis makes 2 GitHub API calls: metadata + recursive tree
-      if (!(await withinGitHubHourlyCap(env, 2))) {
+
+      // Fetch metadata (1 GitHub call) to get pushed_at for cache validation
+      if (!(await withinGitHubHourlyCap(env, 1))) {
         return json({ ok: false, message: 'GitHub API hourly limit reached. Try again next hour.' }, 429, apiCors)
       }
+      let branch, pushedAt
+      try {
+        ({ branch, pushedAt } = await fetchRepoMeta(owner, repo, env.GITHUB_TOKEN))
+      } catch (err) {
+        return json({ ok: false, message: err.message ?? 'Could not fetch repository.' }, err.status ?? 502, apiCors)
+      }
 
+      // Cache hit: same pushed_at means no new commits — return immediately
+      const cachedApi = await getCachedAnalysis(env, `${owner}-${repo}`, pushedAt)
+      if (cachedApi) {
+        const selectedFields = fields ?? [...VALID_FIELDS]
+        return json({ ok: true, repo: `${owner}/${repo}`, ...Object.fromEntries(selectedFields.map(f => [f, cachedApi[f] ?? null])) }, 200, apiCors)
+      }
+
+      if (!(await withinDailyCap(env))) return json({ ok: false, message: 'Daily limit reached. Try again tomorrow.' }, 429, apiCors)
+
+      // Cache miss: fetch tree + files (1 more GitHub call)
       let files, repoName
       try {
-        ({ files, repoName } = await fetchFullRepo(owner, repo, env.GITHUB_TOKEN))
+        ({ files, repoName } = await fetchFullRepo(owner, repo, env.GITHUB_TOKEN, branch))
       } catch (err) {
         return json({ ok: false, message: err.message ?? 'Could not fetch repository.' }, err.status ?? 502, apiCors)
       }
@@ -453,6 +491,8 @@ export default {
       } catch {
         return json({ ok: false, message: 'Analysis service returned malformed JSON.' }, 502, apiCors)
       }
+
+      await setCachedAnalysis(env, `${owner}-${repo}`, analysis, pushedAt)
 
       // Return only requested fields, or all fields if none specified
       const selectedFields = fields ?? [...VALID_FIELDS]
@@ -538,18 +578,23 @@ export default {
       return json({ ok: true, summary: sResult.summary ?? '' }, 200, cors)
     }
 
-    // Hard daily ceiling — checked here so only valid, model-bound requests count.
-    if (!(await withinDailyCap(env))) {
-      return json({ ok: false, message: 'Daily analysis limit reached. Please try again tomorrow.' }, 429, cors)
-    }
-
-    let repoName, context
+    let repoName, context, pushedAt, mini
     try {
-      ({ repoName, context } = await request.json())
+      ({ repoName, context, pushedAt, mini } = await request.json())
     } catch {
       return json({ ok: false, message: 'Invalid request body.' }, 400, cors)
     }
     if (!repoName || !context) return json({ ok: false, message: 'repoName and context are required.' }, 400, cors)
+
+    if (!mini) {
+      const cached = await getCachedAnalysis(env, repoName, pushedAt)
+      if (cached) return json({ ok: true, repoName, analysis: cached }, 200, cors)
+    }
+
+    // Hard daily ceiling — only charged when the cache misses.
+    if (!(await withinDailyCap(env))) {
+      return json({ ok: false, message: 'Daily analysis limit reached. Please try again tomorrow.' }, 429, cors)
+    }
 
     // Groq is OpenAI-compatible. response_format json_object forces valid JSON;
     // the schema is described in the prompt (the word "JSON" must appear there).
@@ -601,6 +646,8 @@ export default {
     } catch {
       return json({ ok: false, message: 'Analysis service returned malformed JSON.' }, 502, cors)
     }
+
+    if (!mini) await setCachedAnalysis(env, repoName, analysis, pushedAt)
 
     return json({ ok: true, repoName, analysis }, 200, cors)
   },
