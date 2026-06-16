@@ -34,6 +34,4 @@ Also accepts full GitHub URLs (`https://github.com/owner/repo`).
 
 Have fun analyzing!
 
-z cfmv bferkr
-
 ![z cfmv bferkr wifd cltbp jkri](https://i.redd.it/jt0sr0dwyvjg1.jpeg)
