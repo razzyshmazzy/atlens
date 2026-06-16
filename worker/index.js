@@ -5,19 +5,184 @@
 
 const MODEL = 'llama-3.3-70b-versatile'
 
-// ── Public API ──────────────────────────────────────────────────────────────
+// ── Public API — full Atlens analysis with optional field filtering ───────────
 
-const API_SYSTEM_PROMPT = `You analyze GitHub repositories and describe what they do concisely.
-Return a JSON object with a single "purpose" field: 1-2 sentences describing what this project does, what it produces or outputs, and who it is for. Be specific, not generic.`
+const VALID_FIELDS = new Set([
+  'purpose', 'techStack', 'architecture', 'entryPoints', 'keyFiles', 'setupInstructions', 'openQuestions',
+])
 
-const API_USER_TEMPLATE = (context) =>
-  `${context}\n\nReturn JSON with a single "purpose" field describing this repository.`
+const IGNORED_DIRS = new Set([
+  'node_modules', '.git', 'dist', 'build', '.next', '__pycache__',
+  '.cache', 'coverage', '.nyc_output', 'vendor', '.venv', 'venv',
+  '.tox', 'target', 'out', '.gradle', '.idea', '.vscode',
+])
 
-const API_KEY_FILES = [
-  'README.md', 'README.rst', 'README.txt',
-  'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'requirements.txt',
+const IGNORED_SUFFIXES = [
+  '.min.js', '.min.css', '.map', '.lock',
+  '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp', '.avif',
+  '.woff', '.woff2', '.ttf', '.eot', '.otf',
+  '.pdf', '.zip', '.tar', '.gz', '.rar', '.7z',
+  '.exe', '.dll', '.so', '.dylib',
+  '.db', '.sqlite', '.sqlite3',
+  '.pyc', '.pyo', '.class',
 ]
-const MAX_API_CONTEXT = 5000
+
+const IGNORED_FILENAMES = new Set([
+  'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'Pipfile.lock',
+  'Gemfile.lock', 'poetry.lock', 'composer.lock',
+])
+
+const PRIORITY_FILENAMES = new Set([
+  'README.md', 'README.rst', 'README.txt', 'README',
+  'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod',
+  'requirements.txt', 'Pipfile', 'Gemfile',
+  'Dockerfile', 'docker-compose.yml', 'docker-compose.yaml',
+  '.env.example', '.env.sample',
+  'Makefile', 'CMakeLists.txt',
+])
+
+const PRIORITY_PATTERNS = [
+  /^(index|main|app|server|client|entry)\.(jsx?|tsx?|py|go|rs|rb|php|java|cs)$/i,
+  /^(index|main)\.html?$/i,
+  /^App\.(jsx?|tsx?)$/i,
+  /^__main__\.py$/i,
+]
+
+const LANGUAGE_FAMILIES = {
+  web: ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.html', '.htm', '.css', '.scss', '.sass', '.less', '.vue', '.svelte', '.astro'],
+  python: ['.py', '.pyi', '.pyx'],
+  c: ['.c', '.h', '.cpp', '.cc', '.cxx', '.hpp', '.hh', '.hxx'],
+  go: ['.go'],
+  rust: ['.rs'],
+  ruby: ['.rb', '.erb', '.rake'],
+  php: ['.php'],
+  jvm: ['.java', '.kt', '.kts', '.scala', '.groovy', '.clj'],
+  csharp: ['.cs', '.fs', '.vb'],
+  swift: ['.swift'],
+  shell: ['.sh', '.bash', '.zsh', '.fish'],
+  dart: ['.dart'],
+  elixir: ['.ex', '.exs'],
+}
+
+const EXT_TO_FAMILY = new Map(
+  Object.entries(LANGUAGE_FAMILIES).flatMap(([family, exts]) => exts.map(e => [e, family])),
+)
+
+const apiBasename = p => p.split('/').pop()
+
+function isIgnoredPath(p, isDir) {
+  const segments = p.split('/')
+  if (segments.some(s => IGNORED_DIRS.has(s))) return true
+  if (isDir) return false
+  const base = apiBasename(p)
+  if (IGNORED_FILENAMES.has(base)) return true
+  if (IGNORED_SUFFIXES.some(suf => base.toLowerCase().endsWith(suf))) return true
+  return false
+}
+
+function isPriorityPath(p) {
+  const base = apiBasename(p)
+  if (PRIORITY_FILENAMES.has(base)) return true
+  if (PRIORITY_PATTERNS.some(re => re.test(base))) return true
+  const parts = p.split('/')
+  const srcIdx = parts.findIndex(s => ['src', 'lib', 'app', 'server', 'api'].includes(s))
+  if (srcIdx !== -1 && parts.length - srcIdx <= 3) return true
+  return false
+}
+
+function extOf(p) {
+  const base = apiBasename(p)
+  const dot = base.lastIndexOf('.')
+  return dot <= 0 ? '' : base.slice(dot).toLowerCase()
+}
+
+function familyOf(p) {
+  return EXT_TO_FAMILY.get(extOf(p)) ?? null
+}
+
+function primaryFamilies(blobs) {
+  const counts = new Map()
+  let classified = 0
+  for (const b of blobs) {
+    const fam = familyOf(b.path)
+    if (!fam) continue
+    counts.set(fam, (counts.get(fam) ?? 0) + 1)
+    classified++
+  }
+  if (classified === 0) return new Set()
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1])
+  const primary = new Set()
+  let cumulative = 0
+  for (const [fam, n] of ranked) {
+    primary.add(fam)
+    cumulative += n
+    if (cumulative / classified >= 0.8) break
+  }
+  return primary
+}
+
+async function pooled(items, limit, worker) {
+  const results = new Array(items.length)
+  let next = 0
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++
+      results[i] = await worker(items[i], i)
+    }
+  })
+  await Promise.all(runners)
+  return results
+}
+
+const MAX_API_CONTEXT_CHARS = 18_000
+const API_PRIORITY_LINES = 100
+const API_SRC_LINES = 50
+const API_OTHER_LINES = 25
+
+function stripNoise(content) {
+  return content
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(
+      /^\s*(\/\*[\s\S]*?\*\/|(?:\/\/.*\n)+|(?:#.*\n)+)/,
+      block => (/copyright|licen[sc]e|spdx|permission is hereby granted/i.test(block) ? '' : block),
+    )
+    .trimStart()
+}
+
+function truncateLines(content, maxLines) {
+  const lines = content.split('\n')
+  if (lines.length <= maxLines) return content
+  return `${lines.slice(0, maxLines).join('\n')}\n[... ${lines.length - maxLines} more lines not shown ...]`
+}
+
+function apiLineLimit(file) {
+  const base = apiBasename(file.path)
+  if (/readme/i.test(file.path) ||
+    /^(package\.json|pyproject\.toml|cargo\.toml|go\.mod|requirements\.txt|dockerfile|docker-compose\.ya?ml|makefile)$/i.test(base)) {
+    return API_PRIORITY_LINES
+  }
+  return file.primaryLang ? API_SRC_LINES : API_OTHER_LINES
+}
+
+function buildFullContext(files) {
+  const readable = files.filter(f => !f.skipped && f.content)
+  const priority = readable.filter(f => f.priority)
+  const nonPriority = readable.filter(f => !f.priority)
+  nonPriority.sort((a, b) => {
+    if (a.primaryLang !== b.primaryLang) return a.primaryLang ? -1 : 1
+    const depth = a.path.split('/').length - b.path.split('/').length
+    return depth !== 0 ? depth : a.path.localeCompare(b.path)
+  })
+  const ordered = [...priority, ...nonPriority]
+  const skipped = files.filter(f => f.skipped)
+  let context = `Repository contains ${files.length} analysed files (${skipped.length} skipped).\n\n`
+  for (const file of ordered) {
+    const block = `=== ${file.path} ===\n${truncateLines(stripNoise(file.content), apiLineLimit(file))}\n\n`
+    if (context.length + block.length > MAX_API_CONTEXT_CHARS) break
+    context += block
+  }
+  return context
+}
 
 function parseRepo(input) {
   const trimmed = (input ?? '').trim().replace(/\.git$/, '').replace(/\/$/, '')
@@ -26,7 +191,7 @@ function parseRepo(input) {
   return { owner: m[1], repo: m[2] }
 }
 
-async function fetchRepoContext(owner, repo, githubToken) {
+async function fetchFullRepo(owner, repo, githubToken) {
   const token = (githubToken ?? '').trim()
   const ghHeaders = { Accept: 'application/vnd.github+json', 'User-Agent': 'atlens-proxy' }
   if (token) ghHeaders['Authorization'] = `Bearer ${token}`
@@ -35,7 +200,6 @@ async function fetchRepoContext(owner, repo, githubToken) {
   if (metaRes.status === 404) throw Object.assign(new Error('Repository not found or is private.'), { status: 404 })
   if (metaRes.status === 403 || metaRes.status === 429) {
     const body = await metaRes.json().catch(() => ({}))
-    console.error('[atlens/api] GitHub 403/429:', JSON.stringify(body), 'authenticated:', !!token)
     const msg = body?.message ?? ''
     if (msg.toLowerCase().includes('rate limit')) throw Object.assign(new Error('GitHub rate limit reached. Try again in a moment.'), { status: 429 })
     throw Object.assign(new Error(`GitHub error: ${msg || metaRes.status}`), { status: 403 })
@@ -45,23 +209,48 @@ async function fetchRepoContext(owner, repo, githubToken) {
   const meta = await metaRes.json()
   const branch = meta.default_branch ?? 'main'
 
-  let context = `Repository: ${owner}/${repo}\n`
-  if (meta.description) context += `Description: ${meta.description}\n`
-  context += '\n'
+  const treeRes = await fetch(
+    `https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`,
+    { headers: ghHeaders },
+  )
+  if (!treeRes.ok) throw Object.assign(new Error('Could not fetch repository tree.'), { status: 502 })
+  const treeData = await treeRes.json()
 
-  for (const filename of API_KEY_FILES) {
-    if (context.length >= MAX_API_CONTEXT) break
-    try {
-      const res = await fetch(
-        `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filename}`,
-      )
-      if (!res.ok) continue
-      const text = await res.text()
-      context += `=== ${filename} ===\n${text.slice(0, 2000)}\n\n`
-    } catch { /* skip missing files */ }
+  const blobs = []
+  for (const entry of Array.isArray(treeData.tree) ? treeData.tree : []) {
+    if (entry.type !== 'blob') continue
+    if (isIgnoredPath(entry.path, false)) continue
+    blobs.push({ path: entry.path, size: entry.size ?? 0 })
   }
 
-  return context.slice(0, MAX_API_CONTEXT)
+  const primary = primaryFamilies(blobs)
+  const isPrimaryLang = p => { const f = familyOf(p); return f !== null && primary.has(f) }
+  const tierOf = x => (x.priority ? 0 : x.primaryLang ? 1 : 2)
+
+  const ranked = blobs
+    .map(b => ({ ...b, priority: isPriorityPath(b.path), primaryLang: isPrimaryLang(b.path) }))
+    .sort((a, b) => {
+      if (tierOf(a) !== tierOf(b)) return tierOf(a) - tierOf(b)
+      const depth = a.path.split('/').length - b.path.split('/').length
+      return depth !== 0 ? depth : a.path.localeCompare(b.path)
+    })
+  const selected = ranked.slice(0, 200)
+
+  const files = await pooled(selected, 10, async b => {
+    if (b.size > 100 * 1024) return { path: b.path, content: null, skipped: true, reason: 'too_large' }
+    const url = `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(branch)}/${b.path.split('/').map(encodeURIComponent).join('/')}`
+    try {
+      const res = await fetch(url)
+      if (!res.ok) return { path: b.path, content: null, skipped: true, reason: 'read_error' }
+      const content = await res.text()
+      if (content.includes('\u0000')) return { path: b.path, content: null, skipped: true, reason: 'binary' }
+      return { path: b.path, content, sizeBytes: b.size, skipped: false, priority: b.priority, primaryLang: b.primaryLang }
+    } catch {
+      return { path: b.path, content: null, skipped: true, reason: 'read_error' }
+    }
+  })
+
+  return { files, repoName: `${owner}-${repo}` }
 }
 
 // ── App endpoints ───────────────────────────────────────────────────────────
@@ -138,12 +327,12 @@ function originAllowed(origin, env) {
  * is possible under concurrent bursts — fine for protecting a quota. Skipped if
  * no KV namespace is bound (local dev / tests).
  */
-async function withinGitHubHourlyCap(env) {
+async function withinGitHubHourlyCap(env, count = 1) {
   if (!env.USAGE_KV) return true
   const key = `github:${new Date().toISOString().slice(0, 13)}` // UTC hour e.g. "2025-06-15T14"
   const current = parseInt((await env.USAGE_KV.get(key)) ?? '0', 10)
-  if (current >= 4950) return false
-  await env.USAGE_KV.put(key, String(current + 1), { expirationTtl: 7200 })
+  if (current + count > 4950) return false
+  await env.USAGE_KV.put(key, String(current + count), { expirationTtl: 7200 })
   return true
 }
 
@@ -190,9 +379,9 @@ export default {
       if (!env.GROQ_API_KEY) return json({ ok: false, message: 'Server misconfigured.' }, 500, apiCors)
       if (!(await withinDailyCap(env))) return json({ ok: false, message: 'Daily limit reached. Try again tomorrow.' }, 429, apiCors)
 
-      let repoInput
+      let repoInput, fields
       try {
-        ({ repo: repoInput } = await request.json())
+        ({ repo: repoInput, fields } = await request.json())
       } catch {
         return json({ ok: false, message: 'Invalid request body.' }, 400, apiCors)
       }
@@ -200,17 +389,33 @@ export default {
       const parsed = parseRepo(repoInput)
       if (!parsed) return json({ ok: false, message: 'Invalid repo. Use "owner/repo" or a full GitHub URL.' }, 400, apiCors)
 
+      if (fields !== undefined) {
+        if (!Array.isArray(fields) || fields.length === 0) {
+          return json({ ok: false, message: '"fields" must be a non-empty array.' }, 400, apiCors)
+        }
+        const invalid = fields.filter(f => !VALID_FIELDS.has(f))
+        if (invalid.length > 0) {
+          return json({
+            ok: false,
+            message: `Unknown field(s): ${invalid.join(', ')}. Valid fields: ${[...VALID_FIELDS].join(', ')}`,
+          }, 400, apiCors)
+        }
+      }
+
       const { owner, repo } = parsed
-      if (!(await withinGitHubHourlyCap(env))) {
+      // Full analysis makes 2 GitHub API calls: metadata + recursive tree
+      if (!(await withinGitHubHourlyCap(env, 2))) {
         return json({ ok: false, message: 'GitHub API hourly limit reached. Try again next hour.' }, 429, apiCors)
       }
 
-      let context
+      let files, repoName
       try {
-        context = await fetchRepoContext(owner, repo, env.GITHUB_TOKEN)
+        ({ files, repoName } = await fetchFullRepo(owner, repo, env.GITHUB_TOKEN))
       } catch (err) {
         return json({ ok: false, message: err.message ?? 'Could not fetch repository.' }, err.status ?? 502, apiCors)
       }
+
+      const context = buildFullContext(files)
 
       let aRes
       try {
@@ -222,8 +427,8 @@ export default {
             temperature: 0.2,
             response_format: { type: 'json_object' },
             messages: [
-              { role: 'system', content: API_SYSTEM_PROMPT },
-              { role: 'user', content: API_USER_TEMPLATE(context) },
+              { role: 'system', content: SYSTEM_PROMPT },
+              { role: 'user', content: USER_TEMPLATE(repoName, context) },
             ],
           }),
         })
@@ -242,14 +447,18 @@ export default {
       const aText = aData?.choices?.[0]?.message?.content
       if (!aText) return json({ ok: false, message: 'Empty response from analysis service.' }, 502, apiCors)
 
-      let result
+      let analysis
       try {
-        result = JSON.parse(aText)
+        analysis = JSON.parse(aText)
       } catch {
         return json({ ok: false, message: 'Analysis service returned malformed JSON.' }, 502, apiCors)
       }
 
-      return json({ ok: true, repo: `${owner}/${repo}`, purpose: result.purpose ?? '' }, 200, apiCors)
+      // Return only requested fields, or all fields if none specified
+      const selectedFields = fields ?? [...VALID_FIELDS]
+      const result = Object.fromEntries(selectedFields.map(f => [f, analysis[f] ?? null]))
+
+      return json({ ok: true, repo: `${owner}/${repo}`, ...result }, 200, apiCors)
     }
 
     // ── App endpoints: gated by allowed origin ───────────────────────────────
