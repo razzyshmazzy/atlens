@@ -51,10 +51,11 @@ function fileBlock(file) {
 }
 
 /**
- * @param {object[]} files  FileEntry objects from github.fetchRepo()
- * @returns {string}        Context string ready to embed in the model prompt
+ * @param {object[]} files    FileEntry objects from github.fetchRepo()
+ * @param {number}  [maxChars=MAX_TOTAL_CHARS]  Override the char budget (e.g. for lightweight purpose-only calls)
+ * @returns {string}          Context string ready to embed in the model prompt
  */
-export function buildContext(files) {
+export function buildContext(files, maxChars = MAX_TOTAL_CHARS) {
   const readable = files.filter((f) => !f.skipped && f.content)
   const priority = readable.filter((f) => f.priority)
   const nonPriority = readable.filter((f) => !f.priority)
@@ -82,7 +83,7 @@ export function buildContext(files) {
   const dropped = []
   for (const file of ordered) {
     const block = fileBlock(file)
-    if (context.length + block.length > MAX_TOTAL_CHARS) {
+    if (context.length + block.length > maxChars) {
       dropped.push(file.path)
       continue
     }

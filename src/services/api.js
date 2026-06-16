@@ -52,9 +52,28 @@ export async function analyzeRepo(repoUrl, knownBranch) {
  * Run the full analysis pipeline for a repo but return only its purpose string.
  * Returns null (instead of throwing) so callers can skip failed repos gracefully.
  */
+// Mini context budget for summarize calls: ~1 050 tokens vs ~4 700 for a full
+// analysis. Five of these = ~5 250 tokens — safely under the 12K tokens/minute
+// ceiling. Purpose is the only field needed, so the smaller context is fine.
+const MINI_CONTEXT_CHARS = 4_000
+
 export async function getRepoPurpose(repoUrl, knownBranch) {
   try {
-    const data = await analyzeRepo(repoUrl, knownBranch)
+    const { repoName } = validateGitHubUrl(repoUrl)
+    const { files } = await fetchRepo(repoUrl, knownBranch)
+    const context = buildContext(files, MINI_CONTEXT_CHARS)
+    let res
+    try {
+      res = await fetch(`${PROXY_URL}/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoName, context }),
+      })
+    } catch {
+      return null
+    }
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !data.ok) return null
     return { name: data.repoName, purpose: data.analysis?.purpose ?? null }
   } catch {
     return null
