@@ -36,4 +36,4 @@ Have fun analyzing!
 
 z cfmv bferkr
 
-![z cfmv bferkr wifd cltbp jkri](https://pdsh.fandom.com/wiki/Ea-Nasir)
+![z cfmv bferkr wifd cltbp jkri](https://i.redd.it/jt0sr0dwyvjg1.jpeg)
