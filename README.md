@@ -1,7 +1,7 @@
 ﻿# Atlens
 Analyze any repo.
 
-By inputting a Github repo into Atlens, you will be met with its main functions, what stack it uses, and an organized overview of the file system.
+By inputting a GitHub repo into Atlens, you will be met with its main functions, what stack it uses, and an organized overview of the file system.
 
 If you enter just a username, you can see all the repos that person has. You can then have Atlens analyze as you please.
 
