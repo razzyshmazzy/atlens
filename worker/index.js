@@ -5,7 +5,7 @@
 
 const MODEL = 'llama-3.3-70b-versatile'
 
-// ── Public API — full Atlens analysis with optional field filtering ───────────
+// ── Public API — full Atlens analysis with optional field filtering ─────────
 
 const VALID_FIELDS = new Set([
   'purpose', 'techStack', 'architecture', 'entryPoints', 'keyFiles', 'setupInstructions', 'openQuestions',
