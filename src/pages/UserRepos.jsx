@@ -98,7 +98,7 @@ export default function UserRepos() {
     for (let i = 0; i < toAnalyze.length; i++) {
       const repo = toAnalyze[i]
       setSummarizeStatus({ current: i + 1, total: toAnalyze.length, repoName: repo.name })
-      const result = await getRepoPurpose(`https://github.com/${repo.full_name}`)
+      const result = await getRepoPurpose(`https://github.com/${repo.full_name}`, repo.default_branch)
       if (result?.purpose) {
         purposes.push({ name: repo.name, purpose: result.purpose })
       } else if (repo.description) {

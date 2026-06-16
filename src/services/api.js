@@ -15,11 +15,11 @@ const PROXY_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8787'
  * @returns {Promise<object>} { ok, repoName, analysis, fileTree, fileCount, skippedFiles }
  * @throws {Error} with a user-facing .message (and optional .code) on failure
  */
-export async function analyzeRepo(repoUrl) {
+export async function analyzeRepo(repoUrl, knownBranch) {
   // Validate first so a bad URL fails fast with a clear message.
   const { repoName } = validateGitHubUrl(repoUrl)
 
-  const { files, tree, fileCount, skippedFiles } = await fetchRepo(repoUrl)
+  const { files, tree, fileCount, skippedFiles } = await fetchRepo(repoUrl, knownBranch)
   const context = buildContext(files)
 
   let res
@@ -52,9 +52,9 @@ export async function analyzeRepo(repoUrl) {
  * Run the full analysis pipeline for a repo but return only its purpose string.
  * Returns null (instead of throwing) so callers can skip failed repos gracefully.
  */
-export async function getRepoPurpose(repoUrl) {
+export async function getRepoPurpose(repoUrl, knownBranch) {
   try {
-    const data = await analyzeRepo(repoUrl)
+    const data = await analyzeRepo(repoUrl, knownBranch)
     return { name: data.repoName, purpose: data.analysis?.purpose ?? null }
   } catch {
     return null

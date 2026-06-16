@@ -214,12 +214,15 @@ async function pooled(items, limit, worker) {
  * @returns {Promise<{files: object[], tree: object[], fileCount: number, skippedFiles: number}>}
  *   `files` entries match the old server shape: { path, content, sizeBytes, skipped, reason?, priority }
  */
-export async function fetchRepo(repoUrl) {
+export async function fetchRepo(repoUrl, knownBranch) {
   const { owner, repo } = validateGitHubUrl(repoUrl)
 
-  // 1) Resolve the default branch.
-  const meta = await ghJson(`https://api.github.com/repos/${owner}/${repo}`)
-  const branch = meta.default_branch ?? 'main'
+  // 1) Resolve the default branch (skip API call if caller already knows it).
+  let branch = knownBranch
+  if (!branch) {
+    const meta = await ghJson(`https://api.github.com/repos/${owner}/${repo}`)
+    branch = meta.default_branch ?? 'main'
+  }
 
   // 2) One recursive tree call lists every blob/tree in the repo.
   const treeData = await ghJson(

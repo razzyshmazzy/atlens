@@ -121,19 +121,6 @@ export default {
 
     if (!env.GROQ_API_KEY) return json({ ok: false, message: 'Server is missing GROQ_API_KEY.' }, 500, cors)
 
-    let repoName, context
-    try {
-      ({ repoName, context } = await request.json())
-    } catch {
-      return json({ ok: false, message: 'Invalid request body.' }, 400, cors)
-    }
-    if (!repoName || !context) return json({ ok: false, message: 'repoName and context are required.' }, 400, cors)
-
-    // Hard daily ceiling — checked here so only valid, model-bound requests count.
-    if (!(await withinDailyCap(env))) {
-      return json({ ok: false, message: 'Daily analysis limit reached. Please try again tomorrow.' }, 429, cors)
-    }
-
     const pathname = new URL(request.url).pathname
 
     if (pathname === '/summarize') {
@@ -145,6 +132,10 @@ export default {
       }
       if (!username || !Array.isArray(repos) || repos.length === 0) {
         return json({ ok: false, message: 'username and repos are required.' }, 400, cors)
+      }
+
+      if (!(await withinDailyCap(env))) {
+        return json({ ok: false, message: 'Daily analysis limit reached. Please try again tomorrow.' }, 429, cors)
       }
 
       const groqBody = {
@@ -194,6 +185,19 @@ export default {
 
       return json({ ok: true, summary: sResult.summary ?? '' }, 200, cors)
     }
+
+    // Hard daily ceiling — checked here so only valid, model-bound requests count.
+    if (!(await withinDailyCap(env))) {
+      return json({ ok: false, message: 'Daily analysis limit reached. Please try again tomorrow.' }, 429, cors)
+    }
+
+    let repoName, context
+    try {
+      ({ repoName, context } = await request.json())
+    } catch {
+      return json({ ok: false, message: 'Invalid request body.' }, 400, cors)
+    }
+    if (!repoName || !context) return json({ ok: false, message: 'repoName and context are required.' }, 400, cors)
 
     // Groq is OpenAI-compatible. response_format json_object forces valid JSON;
     // the schema is described in the prompt (the word "JSON" must appear there).
