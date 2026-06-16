@@ -131,6 +131,15 @@ function originAllowed(origin, env) {
  * is possible under concurrent bursts — fine for protecting a quota. Skipped if
  * no KV namespace is bound (local dev / tests).
  */
+async function withinGitHubHourlyCap(env) {
+  if (!env.USAGE_KV) return true
+  const key = `github:${new Date().toISOString().slice(0, 13)}` // UTC hour e.g. "2025-06-15T14"
+  const current = parseInt((await env.USAGE_KV.get(key)) ?? '0', 10)
+  if (current >= 4950) return false
+  await env.USAGE_KV.put(key, String(current + 1), { expirationTtl: 7200 })
+  return true
+}
+
 async function withinDailyCap(env) {
   if (!env.USAGE_KV) return true
   const limit = parseInt(env.DAILY_LIMIT ?? '1000', 10)
@@ -185,6 +194,10 @@ export default {
       if (!parsed) return json({ ok: false, message: 'Invalid repo. Use "owner/repo" or a full GitHub URL.' }, 400, apiCors)
 
       const { owner, repo } = parsed
+      if (!(await withinGitHubHourlyCap(env))) {
+        return json({ ok: false, message: 'GitHub API hourly limit reached. Try again next hour.' }, 429, apiCors)
+      }
+
       let context
       try {
         context = await fetchRepoContext(owner, repo, env.GITHUB_TOKEN)
