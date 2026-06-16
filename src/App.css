@@ -97,6 +97,9 @@
   margin: 0 auto;
   padding: 2rem 1.5rem 5rem;
   text-align: left;
+  background: #000;
+  min-height: 100vh;
+  position: relative;
 }
 
 .page--centered {
