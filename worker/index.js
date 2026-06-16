@@ -27,12 +27,19 @@ function parseRepo(input) {
 }
 
 async function fetchRepoContext(owner, repo, githubToken) {
-  const ghHeaders = { Accept: 'application/vnd.github+json' }
-  if (githubToken) ghHeaders['Authorization'] = `Bearer ${githubToken}`
+  const token = (githubToken ?? '').trim()
+  const ghHeaders = { Accept: 'application/vnd.github+json', 'User-Agent': 'atlens-proxy' }
+  if (token) ghHeaders['Authorization'] = `Bearer ${token}`
 
   const metaRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers: ghHeaders })
   if (metaRes.status === 404) throw Object.assign(new Error('Repository not found or is private.'), { status: 404 })
-  if (metaRes.status === 403 || metaRes.status === 429) throw Object.assign(new Error('GitHub rate limit reached. Try again in a moment.'), { status: 429 })
+  if (metaRes.status === 403 || metaRes.status === 429) {
+    const body = await metaRes.json().catch(() => ({}))
+    console.error('[atlens/api] GitHub 403/429:', JSON.stringify(body), 'authenticated:', !!token)
+    const msg = body?.message ?? ''
+    if (msg.toLowerCase().includes('rate limit')) throw Object.assign(new Error('GitHub rate limit reached. Try again in a moment.'), { status: 429 })
+    throw Object.assign(new Error(`GitHub error: ${msg || metaRes.status}`), { status: 403 })
+  }
   if (!metaRes.ok) throw Object.assign(new Error(`GitHub error (${metaRes.status}).`), { status: 502 })
 
   const meta = await metaRes.json()
