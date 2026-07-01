@@ -3,7 +3,7 @@
 // the key. Deploy:
 //   cd worker && npx wrangler secret put GROQ_API_KEY && npx wrangler deploy
 
-const MODEL = 'llama-3.3-70b-versatile'
+const MODEL = 'openai/gpt-oss-120b'
 
 // ── Public API — full Atlens analysis with optional field filtering ─────────
 
