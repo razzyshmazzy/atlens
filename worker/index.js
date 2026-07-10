@@ -135,6 +135,12 @@ async function pooled(items, limit, worker) {
 }
 
 const MAX_API_CONTEXT_CHARS = 18_000
+// Cloudflare's free plan caps a Worker at 50 subrequests per request. The /api
+// path spends: 1 (repo meta) + 1 (tree) + N (file fetches) + 1 (Groq), so N
+// must stay well under 48. 45 keeps a safety margin, and since the prompt is
+// capped at MAX_API_CONTEXT_CHARS only the top-ranked files fit anyway — files
+// beyond ~45 would be fetched and then discarded.
+const MAX_FILES_TO_FETCH = 45
 const API_PRIORITY_LINES = 100
 const API_SRC_LINES = 50
 const API_OTHER_LINES = 25
@@ -239,7 +245,7 @@ async function fetchFullRepo(owner, repo, githubToken, branch) {
       const depth = a.path.split('/').length - b.path.split('/').length
       return depth !== 0 ? depth : a.path.localeCompare(b.path)
     })
-  const selected = ranked.slice(0, 200)
+  const selected = ranked.slice(0, MAX_FILES_TO_FETCH)
 
   const files = await pooled(selected, 10, async b => {
     if (b.size > 100 * 1024) return { path: b.path, content: null, skipped: true, reason: 'too_large' }
