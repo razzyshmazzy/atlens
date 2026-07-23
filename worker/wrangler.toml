@@ -17,7 +17,7 @@ DAILY_LIMIT = "1000"
 #   npx wrangler kv namespace create USAGE
 [[kv_namespaces]]
 binding = "USAGE_KV"
-id = "de733dbb31f143bdbab556eb038fc822"
+id = "1051fa8ed82c443ba58847970f04a18a"
 
 # Built-in rate limiting (free, no extra services). `period` must be 10 or 60.
 # Tune the limits to taste; namespace_id just has to be unique per limiter.
