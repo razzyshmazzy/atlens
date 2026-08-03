@@ -11,7 +11,7 @@ Anyone can call the Atlens API to get a full analysis of any public GitHub repos
 
 **Endpoint**
 ```
-POST https://atlens-proxy.atlens-api.workers.dev/api
+POST https://atlens-proxy.nzametto.workers.dev/api
 Content-Type: application/json
 ```
 
